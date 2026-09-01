@@ -1,0 +1,30 @@
+# Unified Roll Forming Workflow runtime dependencies.
+#
+# Install with:
+#   python -m venv .venv
+#   .\.venv\Scripts\Activate.ps1   # Windows
+#   pip install -r requirements.txt
+#
+# Notes:
+# - Python 3.10+ recommended.
+# - GroundingDINO weights may download on first Inspect run via Hugging Face.
+# - torch/torchvision are only required for the Inspect (CV) stage.
+# - Correct (springback) stage works with numpy/matplotlib/plotly alone if you
+#   only load a rim-equation JSON.
+
+streamlit>=1.45,<2.0
+
+numpy>=1.26,<3.0
+matplotlib>=3.8,<4.0
+plotly>=5.18,<7
+Pillow>=10.0,<12.0
+opencv-python-headless>=4.10,<5.0
+
+transformers>=4.50,<5.0
+huggingface-hub>=0.24
+safetensors>=0.4
+torch>=2.3
+torchvision>=0.18
+
+openai>=1.60.0
+python-dotenv>=1.0.0

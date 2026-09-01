@@ -1,0 +1,15 @@
+# Byte-compiled / cache
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.env
+.streamlit/secrets.toml
+
+# Local test photos (large — keep on disk only)
+uploads/*
+!uploads/.gitkeep
+
+# Local outputs
+*.png
+!assets/
