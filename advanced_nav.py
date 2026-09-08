@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import streamlit as st
 
-from branding import logo_band_html
+from branding import render_logo_band
 
 _PAGES = (
     ("check", "Check roll", "app.py"),
@@ -27,7 +27,7 @@ def _menu_popover(*, active: str) -> None:
 
 def render_top_menu(*, active: str, title_html: str | None = None) -> None:
     """NST logo band, centered page title, MENU top-right."""
-    st.markdown(logo_band_html(), unsafe_allow_html=True)
+    render_logo_band()
     st.markdown('<span class="nav-header-anchor" aria-hidden="true"></span>', unsafe_allow_html=True)
     _left, center, menu_col = st.columns([2, 8, 2], vertical_alignment="center")
     with center:
