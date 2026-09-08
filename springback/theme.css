@@ -288,43 +288,35 @@ h1, h2, h3, h4, p, label, li, .stMarkdown, .stCaption,
     background: #111111 !important;
 }
 
-/* Native st.image logo: black strip + image pulled up into it */
-.app-brand-band--native {
-    height: 4.35rem !important;
-    margin-bottom: -3.55rem !important;
-    padding: 0 !important;
-}
-
-.app-brand-band-spacer {
-    height: 0.85rem !important;
-}
-
-/* Keep the logo image row compact and centered */
-div[data-testid="stHorizontalBlock"]:has(.app-brand-logo-flag) {
-    position: relative !important;
-    z-index: 2 !important;
-    align-items: center !important;
-    margin-bottom: 0 !important;
-}
-
-div[data-testid="stHorizontalBlock"]:has(.app-brand-logo-flag) [data-testid="stImage"] {
-    text-align: center !important;
-}
-
-div[data-testid="stHorizontalBlock"]:has(.app-brand-logo-flag) [data-testid="stImage"] img {
-    max-height: 2.65rem !important;
-    width: auto !important;
-    object-fit: contain !important;
-    margin: 0 auto !important;
-    background: #111111 !important;
-}
-
 .app-brand-fallback {
     font-family: "Archivo Black", Arial, sans-serif !important;
     color: #ffffff !important;
     font-size: 0.9rem !important;
     letter-spacing: 0.1em !important;
     text-transform: uppercase !important;
+}
+
+/* Logo iframe: full-bleed black band, centered, no Streamlit chrome */
+div[data-testid="stElementContainer"]:has(iframe[height="76"]),
+div[data-testid="element-container"]:has(iframe[height="76"]) {
+    width: 100vw !important;
+    max-width: 100vw !important;
+    margin: 0 calc(50% - 50vw) 0.85rem calc(50% - 50vw) !important;
+    padding: 0 !important;
+    background: #111111 !important;
+    border-bottom: 2px solid #111111 !important;
+}
+
+div[data-testid="stElementContainer"]:has(iframe[height="76"]) iframe,
+div[data-testid="element-container"]:has(iframe[height="76"]) iframe {
+    display: block !important;
+    width: 100% !important;
+    border: 0 !important;
+    background: #111111 !important;
+}
+
+span.app-brand-iframe-flag {
+    display: none !important;
 }
 
 /* --- Typography --- */

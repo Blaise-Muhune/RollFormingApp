@@ -7,6 +7,7 @@ from functools import lru_cache
 from pathlib import Path
 
 import streamlit as st
+import streamlit.components.v1 as components
 
 _STATIC = Path(__file__).resolve().parent / "static"
 # Opaque PNG: white/maroon logo on solid black (readable on the dark band).
@@ -46,54 +47,56 @@ def logo_data_uri() -> str:
 
 
 def logo_band_html() -> str:
-    """HTML-only band (legacy). Prefer ``render_logo_band()`` on Streamlit Cloud."""
+    """Centered logo band HTML (used by components.html — Cloud-safe)."""
     uri = logo_data_uri()
     if uri:
         logo = (
-            f'<img class="app-logo-band" src="{uri}" alt="Niles Steel Tank" '
-            f'style="height:2.65rem;width:auto;max-width:min(16rem,85vw);" />'
+            f'<img src="{uri}" alt="Niles Steel Tank" '
+            f'style="display:block;margin:0 auto;height:52px;width:auto;'
+            f'max-width:min(340px,88vw);object-fit:contain;" />'
         )
     else:
-        logo = '<span class="app-brand-fallback">Niles Steel Tank</span>'
-    return (
-        '<div class="app-brand-band" '
-        'style="background:#111111;padding:0.75rem 1rem;text-align:center;'
-        "display:flex;justify-content:center;align-items:center;"
-        'margin:0 0 1rem 0;border-bottom:2px solid #111111;">'
-        f"{logo}</div>"
-    )
+        logo = (
+            '<div style="color:#fff;font-family:Arial Black,Arial,sans-serif;'
+            "letter-spacing:0.14em;text-transform:uppercase;font-size:15px;"
+            'text-align:center;">Niles Steel Tank</div>'
+        )
+    return f"""
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8"/>
+<style>
+  html, body {{
+    margin: 0;
+    padding: 0;
+    background: #111111;
+    overflow: hidden;
+  }}
+  .band {{
+    background: #111111;
+    width: 100%;
+    min-height: 76px;
+    box-sizing: border-box;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 14px 20px;
+  }}
+</style>
+</head>
+<body>
+  <div class="band">{logo}</div>
+</body>
+</html>
+"""
 
 
 def render_logo_band() -> None:
-    """Black NST band with logo via ``st.image`` (works on Streamlit Cloud).
-
-    Markdown ``data:`` images are unreliable across Streamlit versions; the tab
-    favicon already proves the PNG is on disk — serve it the same way Streamlit
-    serves other media.
-    """
-    path = _resolve_logo()
-    # Full-bleed black strip; logo image sits on top via negative margin.
+    """Full-width black NST band with a large centered logo."""
+    components.html(logo_band_html(), height=76, scrolling=False)
+    # Pull the iframe tight to the page edges / kill Streamlit chrome gaps.
     st.markdown(
-        '<div class="app-brand-band app-brand-band--native" aria-hidden="true"></div>',
-        unsafe_allow_html=True,
-    )
-    if path is None:
-        st.markdown(
-            '<p class="app-brand-fallback" style="text-align:center;margin:0 0 1rem 0;'
-            'position:relative;z-index:2;">Niles Steel Tank</p>',
-            unsafe_allow_html=True,
-        )
-        return
-
-    left, mid, right = st.columns([1, 2.4, 1])
-    with mid:
-        # Marker so theme CSS only targets this logo row (not photo overlays).
-        st.markdown(
-            '<span class="app-brand-logo-flag" aria-hidden="true"></span>',
-            unsafe_allow_html=True,
-        )
-        st.image(str(path), width=300)
-    st.markdown(
-        '<div class="app-brand-band-spacer" aria-hidden="true"></div>',
+        '<span class="app-brand-iframe-flag" aria-hidden="true"></span>',
         unsafe_allow_html=True,
     )
