@@ -253,7 +253,8 @@ def render_shop_job_inputs(
         st.session_state.job_material_grade = grade_default
 
     if compact:
-        c1, c2, c3 = st.columns(3)
+        st.markdown('<span class="job-inputs-row-marker" aria-hidden="true"></span>', unsafe_allow_html=True)
+        c1, c2, c3 = st.columns([2, 2, 5], gap="small")
         with c1:
             size_choice = st.selectbox(
                 diameter_label,

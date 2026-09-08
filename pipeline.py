@@ -18,6 +18,10 @@ from cv.detection import detect_and_crop_tank, load_detector
 from cv.preprocessing import generate_edge_map
 from cv.rim_analysis import detect_rim_multistart
 from cv.rim_fit import build_rim_equation_export, fit_rim_equation
+from operator_display import (
+    SMOOTH_PASS_MIN_PCT,
+    SPOT_TOLERANCE_PCT,
+)
 from springback.calculations import (
     calculate_required_loaded_radius,
     estimate_final_radius_from_loaded,
@@ -48,8 +52,8 @@ DEFAULT_CV_SETTINGS = {
     "search_band": 120,
     "max_step_change": 30,
     "window_size": 21,
-    "curvature_tolerance": 5.0,
-    "target_mode": "Median detected radius",
+    "curvature_tolerance": SPOT_TOLERANCE_PCT,
+    "target_mode": "Smooth bend profile",
 }
 
 
@@ -78,7 +82,7 @@ def run_quick_pipeline(
     detector=None,
     solver_sample_count: int = CORRECTION_SOLVER_SAMPLE_COUNT,
     include_schedule: bool = True,
-    ready_ok_percent: float = 85.0,
+    ready_ok_percent: float = SMOOTH_PASS_MIN_PCT,
 ) -> dict[str, Any]:
     """Run CV analysis then springback correction for one uploaded image.
 
@@ -180,8 +184,8 @@ def run_quick_pipeline(
             "Rim detection returned too few points. Open Advanced Inspect to tune."
         )
 
-    # Prefer job target radius for springback; CV target follows the configured
-    # target_mode (median of detected rim by default for unattended Quick Run).
+    # Prefer job target radius for springback; CV pass/fail follows the configured
+    # target_mode (smooth bend profile by default for unattended Quick Run).
     correction_output = compute_curvature_correction(
         radius_uniform_pixels=radius_uniform_pixels,
         theta_uniform=theta_uniform,
@@ -197,7 +201,11 @@ def run_quick_pipeline(
     # target (inches) so Correct stays consistent with the fitted equation.
     cv_target_radius_inches = float(correction_output["target_radius_inches"])
     within_tol = float(correction_output["within_tolerance_percent"])
-    roll_ready = within_tol >= float(ready_ok_percent)
+    max_smooth_error = float(correction_output["max_abs_smooth_error_percent"])
+    roll_ready = (
+        within_tol >= float(ready_ok_percent)
+        and max_smooth_error <= SPOT_TOLERANCE_PCT
+    )
 
     rim_fit = fit_rim_equation(
         x_rim=x_rim,
@@ -288,6 +296,11 @@ def run_quick_pipeline(
             "within_tolerance_percent": within_tol,
             "too_flat_percent": float(correction_output["too_flat_percent"]),
             "too_tight_percent": float(correction_output["too_tight_percent"]),
+            "max_abs_smooth_error_percent": max_smooth_error,
+            "worst_smooth_idx": int(correction_output["worst_smooth_idx"]),
+            "worst_smooth_error_percent": float(correction_output["worst_smooth_error_percent"]),
+            "worst_smooth_action": correction_output["worst_smooth_action"],
+            "worst_smooth_angle": float(correction_output["worst_smooth_angle"]),
             "pixels_per_inch": pixels_per_inch,
             "cv_target_radius_inches": cv_target_radius_inches,
         },

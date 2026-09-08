@@ -1,13 +1,19 @@
-import time
-
 import streamlit as st
 
-from springback.calculations import calculate_required_loaded_radius, estimate_final_radius_from_loaded
+from springback.calculations import calculate_required_loaded_radius
 from springback.defaults import get_default_setup, setup_from_json, setup_to_json
 from springback.ellipse import parse_ellipse_coefficients, sample_ellipse_compensation
 from springback.geometry import solve_machine_positions
 from springback.plotting import plot_ellipse_compensation, plot_roll_former_geometry
-from springback.ui import apply_theme, big_metric, metric_row, number_input, panel_start
+from springback.ui import (
+    apply_theme,
+    lr_hero,
+    metric_row,
+    number_input,
+    start_badge,
+    step_label,
+    step_label_row,
+)
 from springback.schedule import (
     CORRECTION_SOLVER_SAMPLE_COUNT,
     calculate_side_roll_adjustment_schedule,
@@ -15,13 +21,12 @@ from springback.schedule import (
 )
 from bertsch_chart import (
     apply_pending_job_dropdowns,
-    inches_to_mm,
     positions_to_chart_axes,
     render_shop_job_inputs,
 )
 from advanced_nav import render_top_menu
+from branding import LOGO_PATH
 from workflow import (
-    STEP_CORRECT,
     get_inspect_target_radius,
     get_rim_equation_json,
     rim_equation_ready,
@@ -111,10 +116,7 @@ def initialize_state():
         st.session_state.pop("correct_target_radius_locked", None)
         applied_job = True
         st.session_state["_correct_job_banner"] = (
-            f"Loaded from Check roll: {pending['diameter_in']:.0f}\" · "
-            f'{pending["thickness_in"]:.3f}" · '
-            f"{pending.get('material_name', 'material')} "
-            f"({pending['yield_psi']:,.0f} psi). Run the calculator."
+            "Loaded from Check roll — job settings applied."
         )
         # Must run before render_shop_job_inputs creates the selectboxes.
         apply_pending_job_dropdowns(pending)
@@ -202,7 +204,6 @@ def render_operator_do_this(setup, positions):
     yield_psi = float(material["yield_strength_ksi"]) * 1000.0
     thickness_choice = thickness_label_from_inches(thickness_in)
     material_name = st.session_state.get("job_material_grade") or ""
-    # Prefer parsed preset name from shared dropdown when present.
     try:
         from bertsch_chart import parse_material_grade_label
 
@@ -223,37 +224,27 @@ def render_operator_do_this(setup, positions):
     l_mm = float(start["l_axis_mm"])
     r_mm = float(start["r_axis_mm"])
     if start.get("verified"):
-        badge = "Verified shop chart"
-        footer = "From your chart (diameter + thickness + material match)."
+        footer = "From your shop chart for this diameter, thickness, and material."
+    elif start.get("source") == "chart_calibrated":
+        footer = start.get("notes") or "Estimate aligned to a nearby chart size."
     else:
-        badge = "Calculator estimate"
-        footer = "No full chart match — estimate only. Prefer a verified chart line when you have one."
+        footer = "Estimate only — confirm on the hanging template before you rely on it."
 
+    step_label_row("Set on jog", start_badge(start))
+    st.markdown(lr_hero(l_mm, r_mm, highlight=True), unsafe_allow_html=True)
     st.markdown(
-        f"""
-        <div class="do-card">
-          <h2>What to set on the Bertsch</h2>
-          <p class="do-meta">{diameter_in:.0f}&quot; · {thickness_in:.3f}&quot; thick · {yield_psi:,.0f} psi · {badge}</p>
-          <div class="axis-grid">
-            <div class="axis-tile">
-              <div class="label">L Axis</div>
-              <div class="value">{l_mm:.0f} mm</div>
-            </div>
-            <div class="axis-tile r">
-              <div class="label">R Axis</div>
-              <div class="value">{r_mm:.0f} mm</div>
-            </div>
-          </div>
-          <ol class="do-steps">
-            <li>On Jog, set <strong>L Axis to {l_mm:.0f} mm</strong>.</li>
-            <li>Set <strong>R Axis to {r_mm:.0f} mm</strong>.</li>
+        """
+        <div class="action-card primary">
+          <h3>On the Bertsch</h3>
+          <ol class="action-steps">
+            <li>On Jog, set <strong>L Axis</strong> and <strong>R Axis</strong> to the values above.</li>
             <li>Roll, check the hanging template, then photo on Check roll if needed.</li>
           </ol>
-          <p class="do-meta" style="margin-top:0.75rem;margin-bottom:0">{footer}</p>
         </div>
         """,
         unsafe_allow_html=True,
     )
+    st.caption(footer)
 
     if not (
         positions["left_solution"]["travel_in_range"]
@@ -261,23 +252,21 @@ def render_operator_do_this(setup, positions):
     ):
         st.warning("These travels may be outside the machine’s configured limits — confirm on the console.")
 
+    return {"l_mm": l_mm, "r_mm": r_mm, "start": start}
 
-def render_header(setup):
-    """Render title row."""
+
+def render_header():
+    """Render title row — matches Check roll header."""
     render_top_menu(
         active="correct",
-        title_html=(
-            '<div class="app-title">Calculate adjustment</div>'
-            '<p class="app-sub">Set these L / R numbers on the Bertsch, then check the template.</p>'
-        ),
+        title_html='<div class="app-title">Correct adjustment</div>',
     )
 
 
 def render_sidebar_inputs(setup):
-    """Machine geometry only — job inputs live on the main page."""
+    """Machine geometry — collapsed in sidebar for engineers."""
     with st.sidebar:
-        st.markdown("### Machine")
-        with st.expander("Engineering setup", expanded=False):
+        with st.expander("Machine setup", expanded=False):
             setup["machine_layout"] = st.selectbox(
                 "Machine / Roll Layout",
                 ["4-Roll Pyramid"],
@@ -303,7 +292,7 @@ def render_sidebar_inputs(setup):
 
 def render_job_inputs_main(setup):
     """Same diameter / thickness / grade dropdowns as Check roll."""
-    return render_shop_job_inputs(setup)
+    return render_shop_job_inputs(setup, compact=True)
 
 
 def render_roll_geometry_inputs(setup):
@@ -429,8 +418,8 @@ def render_pivot_position_inputs(setup):
 
 def render_geometry_summary(setup, positions):
     """Display fixed geometry and solved span metrics."""
+    step_label("Machine geometry")
     geometry = setup["geometry"]
-    panel_start("Roll / Machine Geometry (Fixed)")
     metric_row("Top Roll Radius (R1)", f"{geometry['top_roll_radius_in']:.3f} in")
     metric_row("Bottom Roll Radius (R2)", f"{geometry['bottom_roll_radius_in']:.3f} in")
     metric_row("Side Roll Radius", f"{geometry['side_roll_radius_in']:.3f} in")
@@ -438,87 +427,40 @@ def render_geometry_summary(setup, positions):
     metric_row("Top Roll Center Height", f"{positions['top_center'][1] - positions['left_center'][1]:.3f} in")
 
 
-def render_current_positions(setup, positions):
-    """Display solved travel in shop chart language (L/R Axis mm)."""
-    panel_start("Bertsch L / R (chart language)")
+def render_calculator_comparison(setup, positions, operator_lr):
+    """Show model L/R only when it disagrees with Set on jog."""
     axes = positions_to_chart_axes(positions)
-    material = setup["material"]
-    diameter_in = float(material["target_final_radius_in"]) * 2.0
+    l_calc = float(axes["l_axis_mm"])
+    r_calc = float(axes["r_axis_mm"])
+    l_set = float(operator_lr["l_mm"])
+    r_set = float(operator_lr["r_mm"])
+    if abs(l_calc - l_set) < 1.0 and abs(r_calc - r_set) < 1.0:
+        return
 
-    st.markdown(
-        f"**Desired Diameter** {diameter_in:.0f}\" · "
-        f"**Thickness** {material['sheet_thickness_in']:.3f}\" · "
-        f"**Yield** {material['yield_strength_ksi'] * 1000:.0f} psi"
+    step_label("Calculator differs")
+    st.caption(
+        "The springback model does not match Set on jog above. "
+        "Use Set on jog on the floor; this row is for engineering review."
     )
-    left_col, right_col, bottom_col = st.columns(3)
-    with left_col:
-        st.markdown("**L Axis**")
-        st.markdown(
-            f"<div class='travel-value'>{axes['l_axis_mm']:.0f} mm</div>",
-            unsafe_allow_html=True,
-        )
-        st.caption(f"{axes['l_axis_in']:.3f} in travel")
-    with right_col:
-        st.markdown("**R Axis**")
-        st.markdown(
-            f"<div class='travel-value'>{axes['r_axis_mm']:.0f} mm</div>",
-            unsafe_allow_html=True,
-        )
-        st.caption(f"{axes['r_axis_in']:.3f} in travel")
-    with bottom_col:
-        st.markdown("**Bottom (pinch)**")
-        st.markdown(
-            f"<div class='travel-value'>{inches_to_mm(positions['bottom_travel']):.0f} mm</div>",
-            unsafe_allow_html=True,
-        )
-        st.caption(f"{positions['bottom_travel']:+.3f} in")
-
-    st.markdown(
-        '<div class="muted-note">'
-        "Same language as the shop chart (L Axis / R Axis in mm on the Jog screen). "
-        "This is a calculator estimate — confirm against a verified chart line and the hanging template."
-        "</div>",
-        unsafe_allow_html=True,
-    )
+    metric_row("Model L axis", f"{l_calc:.0f} mm")
+    metric_row("Model R axis", f"{r_calc:.0f} mm")
 
 
 def render_results(calculation, positions, target_radius):
-    """Display springback results and travel-limit warnings."""
+    """One-line springback summary for engineers."""
     loaded_radius = calculation["required_loaded_radius"]
-    estimated_final_radius = estimate_final_radius_from_loaded(
-        loaded_radius,
-        st.session_state.elastic_modulus_ksi,
-        st.session_state.yield_strength_ksi,
-        st.session_state.sheet_thickness_in,
-    )
-    radius_difference = estimated_final_radius - target_radius
+    springback_pct = float(calculation["springback_percent"])
 
-    panel_start("Calculated Results", purple=True)
-    big_metric("Current Loaded Radius<br>(Before Springback)", f"{loaded_radius:.2f} in")
-    metric_row("Required Loaded Curvature", f"{calculation['required_loaded_curvature']:.5f} 1/in")
-    metric_row("Springback", f"{calculation['springback_percent']:.1f} %")
-    metric_row("Estimated Final Radius<br>(After Springback)", f"{estimated_final_radius:.2f} in")
-    metric_row("Target Final Radius", f"{target_radius:.2f} in")
-
-    st.markdown(
-        f"""
-        <div class="metric-row">
-            <div class="metric-label">Radius Difference</div>
-            <div class="ok-value">{radius_difference:+.3f} in</div>
-        </div>
-        """,
-        unsafe_allow_html=True,
+    step_label("Springback model")
+    st.caption(
+        f"Roll to about {loaded_radius:.1f}\" loaded radius "
+        f"({springback_pct:.0f}% springback) to land near {target_radius:.1f}\" final."
     )
 
     left_ok = positions["left_solution"]["travel_in_range"]
     right_ok = positions["right_solution"]["travel_in_range"]
-    if left_ok and right_ok:
-        st.success("Side roll travel is inside the configured limits.")
-    else:
-        st.warning("One or both side rolls need travel outside the configured limits.")
-
-    if st.button("Recalculate", use_container_width=True):
-        st.rerun()
+    if not (left_ok and right_ok):
+        st.warning("Model side-roll travel is outside configured limits.")
 
 
 # Side-roll schedule helpers live in springback.schedule (shared with Quick Run).
@@ -541,7 +483,7 @@ def cached_side_roll_adjustment_schedule(
 
 def render_ellipse_upload(nominal_loaded_radius):
     """Render measured-rim correction from Inspect handoff or file upload."""
-    panel_start("Measured Rim Equation Correction", purple=True)
+    step_label("Rim equation")
 
     if st.session_state.pop("_ellipse_autoload_error", None):
         st.error(
@@ -550,17 +492,15 @@ def render_ellipse_upload(nominal_loaded_radius):
         )
 
     if rim_equation_ready() and st.session_state.get("ellipse_source") == "inspect":
-        st.success(
-            "Using rim equation from the Inspect stage (same browser session). "
-            "Optional: upload a different JSON below to override."
-        )
+        st.caption("Loaded from Inspect this session.")
     elif st.session_state.ellipse_coefficients is not None:
-        st.info("Using rim equation coefficients loaded from an uploaded JSON file.")
+        st.caption("Loaded from uploaded JSON.")
 
     uploaded = st.file_uploader(
-        "Upload rim equation coefficient JSON (optional override)",
+        "Upload rim equation JSON",
         type=["json"],
         key="ellipse_upload",
+        label_visibility="collapsed",
     )
 
     if uploaded is not None:
@@ -569,37 +509,15 @@ def render_ellipse_upload(nominal_loaded_radius):
                 uploaded.getvalue().decode("utf-8")
             )
             st.session_state.ellipse_source = "upload"
-            # Freeze against the current Inspect payload so autoload does not
-            # immediately overwrite this file until Inspect publishes again.
             st.session_state.ellipse_autoload_token = get_rim_equation_json()
-            st.success("Rim equation coefficients loaded from file.")
+            st.rerun()
         except Exception as exc:
             st.session_state.ellipse_coefficients = None
             st.session_state.ellipse_source = None
-            st.error(f"Could not load rim equation coefficients: {exc}")
+            st.error(f"Could not load rim equation: {exc}")
 
     if st.session_state.ellipse_coefficients is None:
-        st.caption(
-            "Run Inspect and click Continue, or upload JSON in the form: "
-            "R(theta) = Rt + A3c*cos(3theta) + A3s*sin(3theta) + A0c*cos(2theta) + "
-            "A0s*sin(2theta) + Aec*cos(theta) + Aes*sin(theta) + As."
-        )
-        st.code(
-            """{
-  "coefficients": {
-    "pixels_per_in": 28.18,
-    "Rt": 1240.12,
-    "A3c": 8.98,
-    "A3s": 6.84,
-    "A0c": 39.24,
-    "A0s": 7.74,
-    "Aec": -50.85,
-    "Aes": -20.12,
-    "As": 1.01
-  }
-}""",
-            language="json",
-        )
+        st.caption("Optional — only if you ran Inspect or have a rim-equation file.")
         return
 
     setup = st.session_state.setup
@@ -617,32 +535,9 @@ def render_ellipse_upload(nominal_loaded_radius):
         return
 
     params = compensation["parameters"]
-    summary_cols = st.columns(4)
-    with summary_cols[0]:
-        st.metric("Base fitted radius", f"{params['Rt']:.3f}")
-    with summary_cols[1]:
-        st.metric("Constant radius offset", f"{params['As']:.3f}")
-    with summary_cols[2]:
-        scale_label = (
-            f"{params['pixels_per_in']:.2f} px/in"
-            if params.get("pixels_per_in")
-            else params.get("radius_units", "inches")
-        )
-        st.metric("Scale", scale_label)
-    with summary_cols[3]:
-        st.metric("Max adjustment", f"{compensation['max_abs_adjustment_pct']:.2f} %")
-    shell_circumference_in = params.get(
-        "shell_circumference_in",
-        2 * 3.141592653589793 * material["target_final_radius_in"],
-    )
-    shell_circumference_mm = params.get(
-        "shell_circumference_mm",
-        shell_circumference_in * 25.4,
-    )
     st.caption(
-        f"Radius range from fitted equation: {params['peak_to_peak_radius']:.3f}; "
-        f"target shell circumference: {shell_circumference_in:.3f} in "
-        f"({shell_circumference_mm:.1f} mm)."
+        f"Max rim adjustment {compensation['max_abs_adjustment_pct']:.1f}% · "
+        f"peak-to-peak {params['peak_to_peak_radius']:.2f}"
     )
 
     adjusted_stations = cached_side_roll_adjustment_schedule(
@@ -664,27 +559,29 @@ def render_ellipse_upload(nominal_loaded_radius):
         adjusted_stations=adjusted_stations,
         dominant_stations=compensation["dominant_stations"],
     )
-    st.plotly_chart(fig, use_container_width=True)
 
-    st.markdown("**Largest corrections by drive distance**")
-    st.dataframe(
-        station_table_rows(dominant_stations_by_distance),
-        use_container_width=True,
-        hide_index=True,
-    )
-
-    with st.expander("All angular stations", expanded=False):
+    with st.expander("Rim compensation plot & stations", expanded=False):
+        st.plotly_chart(fig, use_container_width=True)
+        step_label("Largest corrections")
         st.dataframe(
-            station_table_rows(adjusted_stations),
+            station_table_rows(dominant_stations_by_distance),
             use_container_width=True,
             hide_index=True,
         )
+
+        with st.expander("All angular stations", expanded=False):
+            st.dataframe(
+                station_table_rows(adjusted_stations),
+                use_container_width=True,
+                hide_index=True,
+            )
 
 
 def main():
     """Operator-first calculator: L/R to set, engineering details collapsed."""
     st.set_page_config(
-        page_title="Calculate adjustment",
+        page_title="Correct adjustment",
+        page_icon=str(LOGO_PATH),
         layout="centered",
         initial_sidebar_state="collapsed",
     )
@@ -696,8 +593,10 @@ def main():
         st.success(banner)
 
     setup = st.session_state.setup
-    render_header(setup)
+    render_header()
     render_sidebar_inputs(setup)
+
+    step_label("Job")
     render_job_inputs_main(setup)
 
     update_setup_from_inputs(setup)
@@ -707,19 +606,20 @@ def main():
     calculation, positions = calculate_model_state(setup_to_json(setup))
     loaded_radius = calculation["required_loaded_radius"]
 
-    render_operator_do_this(setup, positions)
+    operator_lr = render_operator_do_this(setup, positions)
 
-    with st.expander("Advanced details (engineering)", expanded=False):
-        render_current_positions(setup, positions)
+    with st.expander("Engineering details", expanded=False):
+        render_calculator_comparison(setup, positions, operator_lr)
         render_results(calculation, positions, material["target_final_radius_in"])
-        render_geometry_summary(setup, positions)
-        fig = plot_roll_former_geometry(
-            setup,
-            positions,
-            loaded_radius,
-            roller_phase=0.0,
-        )
-        st.pyplot(fig, use_container_width=True)
+        with st.expander("Machine geometry & diagram", expanded=False):
+            render_geometry_summary(setup, positions)
+            fig = plot_roll_former_geometry(
+                setup,
+                positions,
+                loaded_radius,
+                roller_phase=0.0,
+            )
+            st.pyplot(fig, use_container_width=True)
         render_ellipse_upload(loaded_radius)
 
     st.session_state.animation_running = False

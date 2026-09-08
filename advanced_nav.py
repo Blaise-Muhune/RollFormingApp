@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import streamlit as st
 
+from branding import logo_band_html
+
 _PAGES = (
     ("check", "Check roll", "app.py"),
     ("inspect", "Inspect", "pages/1_Inspect.py"),
@@ -11,23 +13,8 @@ _PAGES = (
 )
 
 
-def _hide_sidebar_page_nav() -> None:
-    st.markdown(
-        """
-        <style>
-        [data-testid="stSidebarNav"],
-        [data-testid="stSidebarNavItems"],
-        section[data-testid="stSidebar"] [data-testid="stSidebarNav"] {
-            display: none !important;
-        }
-        </style>
-        """,
-        unsafe_allow_html=True,
-    )
-
-
 def _menu_popover(*, active: str) -> None:
-    with st.popover("⋮", use_container_width=True):
+    with st.popover("MENU", use_container_width=True):
         for key, label, path in _PAGES:
             if st.button(
                 label,
@@ -39,15 +26,15 @@ def _menu_popover(*, active: str) -> None:
 
 
 def render_top_menu(*, active: str, title_html: str | None = None) -> None:
-    """Three-dot menu in the top-right; optional title on the same row."""
-    _hide_sidebar_page_nav()
-    if title_html:
-        left, right = st.columns([11, 1], vertical_alignment="top")
-        with left:
-            st.markdown(title_html, unsafe_allow_html=True)
-        with right:
-            _menu_popover(active=active)
-    else:
-        _, right = st.columns([11, 1], vertical_alignment="top")
-        with right:
-            _menu_popover(active=active)
+    """NST logo band, centered page title, MENU top-right."""
+    st.markdown(logo_band_html(), unsafe_allow_html=True)
+    st.markdown('<span class="nav-header-anchor" aria-hidden="true"></span>', unsafe_allow_html=True)
+    _left, center, menu_col = st.columns([2, 8, 2], vertical_alignment="center")
+    with center:
+        if title_html:
+            st.markdown(
+                f'<div class="app-header-center">{title_html}</div>',
+                unsafe_allow_html=True,
+            )
+    with menu_col:
+        _menu_popover(active=active)

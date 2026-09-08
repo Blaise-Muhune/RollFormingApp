@@ -31,9 +31,9 @@ from cv.rim_fit import (
 )
 from cv import openai_assist as ai
 from cv import ui_busy
-from cv.paste_image import listen_for_pasted_image
-from springback.ui import apply_theme
+from springback.ui import apply_theme, step_label
 from advanced_nav import render_top_menu
+from branding import LOGO_PATH
 from workflow import STEP_INSPECT, publish_rim_equation
 
 ai.load_project_dotenv()
@@ -42,11 +42,12 @@ ai.load_project_dotenv()
 # STREAMLIT PAGE SETUP
 # -------------------------------------------------
 st.set_page_config(
-    page_title="Roll Forming Workflow",
+    page_title="Inspect rim",
+    page_icon=str(LOGO_PATH),
     layout="wide",
-    initial_sidebar_state="expanded",
+    initial_sidebar_state="collapsed",
 )
-apply_theme()
+apply_theme(wide=True)
 
 # Clear a stuck busy overlay from an interrupted prior run.
 if st.session_state.pop("hold_lock_for_analysis", None):
@@ -56,83 +57,71 @@ if st.session_state.get("ui_busy") and st.session_state["ui_busy"].get("action")
 
 render_top_menu(
     active="inspect",
-    title_html='<div class="app-title">Inspect</div>',
+    title_html='<div class="app-title">Inspect rim</div>',
 )
 
-# -------------------------------------------------
-# CSS STYLES
-# -------------------------------------------------
+_INSPECT_PHOTO_HELP = (
+    "Clear photo of the rolled opening, centered in frame. "
+    "Avoid busy backgrounds for best auto-crop."
+)
 
 st.markdown(
-    """
-    <style>
-    .block-container {
-        padding-top: 3rem;
-        padding-bottom: 2rem;
-        max-width: 1500px;
-    }
-
-    div[data-testid="stMetric"] {
-        background-color: #111827;
-        border: 1px solid #374151;
-        padding: 16px;
-        border-radius: 14px;
-        box-shadow: 0 2px 10px rgba(0,0,0,0.25);
-    }
-
-    div[data-testid="stMetric"] {
-        border-radius: 14px;
-        border: 1px solid rgba(128,128,128,0.25);
-        padding: 14px;
-        background-color: var(--secondary-background-color);
-    }
-
-    div[data-testid="stMetricLabel"] {
-        font-size: 0.9rem;
-    }
-
-    div[data-testid="stMetricValue"] {
-        font-size: 1.2rem !important;
-        line-height: 1.05;
-    }
-
-    .info-card {
-        background-color: var(--secondary-background-color);
-        border: 1px solid rgba(128,128,128,0.3);
-        padding: 18px;
-        border-radius: 14px;
-        margin-bottom: 16px;
-    }
-
-    .small-note {
-        color: #9ca3af;
-        font-size: 0.9rem;
-    }
-
-    /* Sidebar slider accent color */
-    .stSlider [data-baseweb="slider"] div[role="slider"] {
-        background-color: #60a5fa !important;
-        border-color: #60a5fa !important;
-    }
-
-    .stSlider [data-baseweb="slider"] > div > div > div {
-        background-color: #60a5fa !important;
-    }
-
-    /* Checkbox accent */
-    .stCheckbox input:checked + div {
-        background-color: #60a5fa !important;
-    }
-    </style>
-    """,
-    unsafe_allow_html=True
+    f'<p class="step-label">Photo'
+    f'<span class="step-help" title="{_INSPECT_PHOTO_HELP}">?</span></p>',
+    unsafe_allow_html=True,
 )
+st.markdown('<span class="photo-source-picker" aria-hidden="true"></span>', unsafe_allow_html=True)
+_ins_pick1, _ins_pick2 = st.columns(2, gap="small")
+_ins_photo_source = st.session_state.get("inspect_photo_source", "Upload")
+with _ins_pick1:
+    if st.button(
+        "Upload",
+        use_container_width=True,
+        type="primary" if _ins_photo_source == "Upload" else "secondary",
+        key="inspect_pick_upload",
+    ):
+        st.session_state["inspect_photo_source"] = "Upload"
+        st.rerun()
+with _ins_pick2:
+    if st.button(
+        "Take photo",
+        use_container_width=True,
+        type="primary" if _ins_photo_source == "Take photo" else "secondary",
+        key="inspect_pick_camera",
+    ):
+        st.session_state["inspect_photo_source"] = "Take photo"
+        st.rerun()
+inspect_photo_source = st.session_state.get("inspect_photo_source", "Upload")
 
-st.write(
-    "Upload an image of a rolled shell / tank opening, optionally use AI "
-    "calibration, then click **Run analysis** for curvature and force guidance. "
-    "When analysis finishes, continue to **Correct** without exporting JSON."
-)
+inspect_photo_bytes = None
+if inspect_photo_source == "Upload":
+    uploaded_file = st.file_uploader(
+        "Photo file",
+        type=["jpg", "jpeg", "png", "webp"],
+        key="inspect_upload",
+        label_visibility="collapsed",
+    )
+    if uploaded_file is not None:
+        inspect_photo_bytes = uploaded_file.getvalue()
+else:
+    captured = st.session_state.get("inspect_camera_bytes")
+    if captured:
+        st.image(captured, use_container_width=True)
+        if st.button("Retake", key="inspect_retake"):
+            st.session_state.pop("inspect_camera_bytes", None)
+            st.session_state.pop("inspect_camera", None)
+            st.rerun()
+        inspect_photo_bytes = captured
+    else:
+        shot = st.camera_input(
+            "Camera",
+            key="inspect_camera",
+            label_visibility="collapsed",
+        )
+        if shot is not None:
+            st.session_state["inspect_camera_bytes"] = shot.getvalue()
+            st.session_state.pop("inspect_camera", None)
+            st.rerun()
 
 
 # -------------------------------------------------
@@ -266,24 +255,6 @@ def cached_ai_text(cache_key, generator):
 # Rim-equation fit helpers live in cv.rim_fit (shared with Quick Run).
 
 # -------------------------------------------------
-# IMAGE UPLOAD
-# -------------------------------------------------
-uploaded_file = st.file_uploader(
-    "Upload or paste rolled shell / tank image (Avoid complex backgrounds for best results)",
-    type=["jpg", "jpeg", "png"],
-    help="Upload a file, or copy a screenshot and press Ctrl+V / Cmd+V.",
-)
-pasted_bytes = listen_for_pasted_image(key="inspect_paste")
-if pasted_bytes:
-    st.session_state["inspect_paste_bytes"] = pasted_bytes
-    st.session_state["inspect_photo_pick"] = "paste"
-if uploaded_file is not None:
-    upload_id = f"{uploaded_file.name}:{uploaded_file.size}"
-    if upload_id != st.session_state.get("inspect_upload_id"):
-        st.session_state["inspect_upload_id"] = upload_id
-        st.session_state["inspect_photo_pick"] = "upload"
-
-# -------------------------------------------------
 # SIDEBAR CONTROLS
 # -------------------------------------------------
 # Apply AI calibration before widgets are created so values stick on rerun.
@@ -293,7 +264,8 @@ if "apply_ai_settings" in st.session_state:
         st.session_state[key] = value
     st.sidebar.success("Applied AI calibration suggestions.")
 
-st.sidebar.header("AI Assistant (OpenAI)")
+with st.sidebar:
+    step_label("AI assist")
 
 ai_enabled = st.sidebar.checkbox(
     "Enable OpenAI Assist",
@@ -328,7 +300,8 @@ elif ai_enabled:
 else:
     st.sidebar.caption("AI assist is off.")
 
-st.sidebar.header("Detection Settings")
+with st.sidebar:
+    step_label("Detection")
 
 use_auto_crop = st.sidebar.checkbox(
     "Use Auto-Crop",
@@ -372,7 +345,8 @@ blur_kernel = st.sidebar.selectbox(
     help="Softens the image before edge detection. Larger blur reduces noise but can blur out a thin rim.",
 )
 
-st.sidebar.header("Rim Search Settings")
+with st.sidebar:
+    step_label("Rim search")
 
 num_points = st.sidebar.slider(
     "Angular Samples",
@@ -414,7 +388,8 @@ window_size = st.sidebar.slider(
     help="Circular moving-average window on the rim profile. Higher = smoother trend, less local detail.",
 )
 
-st.sidebar.header("Curvature Settings")
+with st.sidebar:
+    step_label("Curvature")
 
 curvature_tolerance = st.sidebar.number_input(
     "Curvature Tolerance [%]",
@@ -427,10 +402,15 @@ curvature_tolerance = st.sidebar.number_input(
 target_mode = st.sidebar.radio(
     "Target Radius Source",
     [
+        "Smooth bend profile",
         "Median detected radius",
         "Expected/manual radius"
     ],
-    help="Median: compare each spot to this part's average shape. Expected/manual: compare to the Expected Radius you set below.",
+    help=(
+        "Smooth bend profile: ignore gradual ovality and flag local flats/kinks. "
+        "Median: compare each spot to this part's average shape. "
+        "Expected/manual: compare to the Expected Radius you set below."
+    ),
 )
 
 real_radius_inches = st.sidebar.number_input(
@@ -443,20 +423,15 @@ real_radius_inches = st.sidebar.number_input(
 # -------------------------------------------------
 # LOAD IMAGE
 # -------------------------------------------------
-if uploaded_file is None and not st.session_state.get("inspect_paste_bytes"):
-    st.info("Upload or paste an image to begin.")
+if inspect_photo_bytes is None:
+    st.caption("Upload or take a photo to begin.")
     st.stop()
 
-if st.session_state.get("inspect_photo_pick") == "paste" and st.session_state.get("inspect_paste_bytes"):
-    uploaded_bytes = st.session_state["inspect_paste_bytes"]
-elif uploaded_file is not None:
-    uploaded_bytes = uploaded_file.getvalue()
-else:
-    uploaded_bytes = st.session_state["inspect_paste_bytes"]
+uploaded_bytes = inspect_photo_bytes
 image = Image.open(BytesIO(uploaded_bytes)).convert("RGB")
 
-with st.expander("Uploaded Image", expanded=False):
-    st.image(image, width=800)
+with st.expander("Uploaded image", expanded=False):
+    st.image(image, use_container_width=True)
 
 # -------------------------------------------------
 # OPENAI PHOTO QUALITY + CALIBRATION
@@ -639,7 +614,7 @@ if _busy_err:
     st.error(f"Last action failed: {_busy_err}")
 
 if ai_enabled and openai_api_key:
-    st.subheader("AI Photo Check & Calibration")
+    step_label("AI photo check")
     qa_col1, qa_col2 = st.columns([1.2, 3.8])
     with qa_col1:
         run_photo_qa = st.button("Check photo", type="primary")
@@ -694,7 +669,7 @@ if ai_enabled and openai_api_key:
                 }
             )
 
-        st.markdown("#### Suggested calibration")
+        step_label("Suggested calibration")
         st.caption(
             f"{changed} setting(s) differ from your current sidebar values. "
             "Manual geometry (center / expected radius) stays under your control "
@@ -748,12 +723,13 @@ if st.session_state.get("analysis_image_id") != image_id:
     st.session_state.analysis_settings_id = None
 
 st.divider()
-st.subheader("Run analysis")
+step_label("Run analysis")
 run_col1, run_col2 = st.columns([1.2, 3.8])
 with run_col1:
     run_clicked = st.button(
         "Run analysis",
         type="primary",
+        use_container_width=True,
         help="Runs tank detection, rim search, curvature, and correction plots using the current sidebar settings.",
     )
 with run_col2:
@@ -916,7 +892,8 @@ if inner_size:
 else:
     default_radius = int(0.5 * min(width, height))
 
-st.sidebar.header("Manual Geometry Override")
+with st.sidebar:
+    step_label("Manual override")
 
 center_x = st.sidebar.number_input(
     "Center X [pixels]",
@@ -1065,7 +1042,7 @@ rim_equation_csv = build_rim_equation_csv(
 # SUMMARY
 # -------------------------------------------------
 
-st.subheader("Curvature / Force Correction Summary")
+step_label("Summary")
 
 col1, col2, col3, col4, col5, col6 = st.columns(6)
 
@@ -1084,7 +1061,7 @@ with force_col1:
         <div class="info-card">
         <strong>Largest Force Decrease</strong><br>
         <span class="small-note">Too tight / over-bent region</span><br><br>
-        <span style="font-size: 1.4rem; color: #f87171;">
+        <span class="info-val info-val-tight">
         {-correction_output['max_force_increase']:.2f}% at θ = {correction_output['max_force_increase_angle']:.3f} rad
         </span>
         </div>
@@ -1098,7 +1075,7 @@ with force_col2:
         <div class="info-card">
         <strong>Largest Force Increase</strong><br>
         <span class="small-note">Too flat / needs more bending</span><br><br>
-        <span style="font-size: 1.4rem; color: #60a5fa;">
+        <span class="info-val info-val-flat">
         {-correction_output['max_force_decrease']:.2f}% at θ = {correction_output['max_force_decrease_angle']:.3f} rad
         </span>
         </div>
@@ -1147,7 +1124,7 @@ def draw_correction_zones(ax, background, *, green_alpha=0.35):
 main_left, main_right = st.columns([1.35, 1])
 
 with main_left:
-    st.markdown("### Expected Circle on Crop")
+    step_label("Expected circle")
     st.caption(
         "Where the app searches for the rim (Center X/Y + Expected Radius). "
         "Different from Correction Zones and from Derived Rim Equation below."
@@ -1184,7 +1161,7 @@ with main_left:
     ax.set_title("Expected Circle on Crop")
     fig_to_streamlit(fig)
 
-    st.markdown("### Correction Zones")
+    step_label("Correction zones")
     st.caption("Where the rim is too flat (blue) or too tight (red) vs within tolerance (green).")
 
     fig_zones, ax_zones = plt.subplots(figsize=(5.5, 5.5))
@@ -1201,9 +1178,9 @@ with main_right:
         <h4>Chart guide</h4>
         <p><strong>Expected Circle on Crop</strong> — red dashed search target on the photo.</p>
         <p><strong>Correction Zones</strong> (photo)</p>
-        <p>🟢 Within tolerance</p>
-        <p>🔵 Too flat: increase force</p>
-        <p>🔴 Too tight: decrease force</p>
+        <p>🟢 Within Tolerance</p>
+        <p>🔵 Too Flat: Increase Force</p>
+        <p>🔴 Too Tight: Decrease Force</p>
         <p class="small-note">
         <strong>Derived Rim Equation</strong> (bottom row) fits a smooth math curve
         to the detected rim — not the same as the expected circle.
@@ -1284,7 +1261,7 @@ with main_right:
 plot1, plot2, plot3 = st.columns(3)
 
 with plot1:
-    st.markdown("### Curvature Error")
+    step_label("Curvature error")
 
     fig, ax = plt.subplots(figsize=(5, 4))
 
@@ -1325,7 +1302,7 @@ with plot1:
     fig_to_streamlit(fig)
 
 with plot2:
-    st.markdown("### Force Correction")
+    step_label("Force correction")
 
     fig, ax = plt.subplots(figsize=(5, 4))
 
@@ -1351,7 +1328,7 @@ with plot2:
     fig_to_streamlit(fig)
 
 with plot3:
-    st.markdown("### Derived Rim Equation")
+    step_label("Rim equation")
     st.caption(
         "Fitted math curve through the detected rim — not the expected search circle above."
     )
@@ -1417,7 +1394,7 @@ metrics_hash = ai.content_hash(ai_result_metrics, uploaded_bytes, ai_model)
 
 if ai_enabled and openai_api_key:
     st.divider()
-    st.subheader("AI Operator Guidance")
+    step_label("Operator guidance")
     st.caption(
         f"Powered by `{ai_model}`. Measurements still come from the CV pipeline — "
         "the model only explains them."
@@ -1444,7 +1421,7 @@ if ai_enabled and openai_api_key:
         with st.expander("Operator summary", expanded=True):
             st.markdown(summary_text)
 
-    st.markdown("#### Ask about this result")
+    step_label("Ask AI")
     if "ai_chat_messages" not in st.session_state:
         st.session_state.ai_chat_messages = []
     if "ai_chat_metrics_hash" not in st.session_state:

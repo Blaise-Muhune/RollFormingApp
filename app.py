@@ -3,53 +3,50 @@
 from __future__ import annotations
 
 import copy
+import importlib
 from io import BytesIO
 
 import streamlit as st
+import streamlit.components.v1 as components
 from PIL import Image
 
 from advanced_nav import render_top_menu
+from branding import LOGO_PATH
 from bertsch_chart import (
     resolve_start_lr,
     render_shop_job_inputs,
     stash_job_for_correct,
 )
 from cv import openai_assist as ai
-from cv.paste_image import listen_for_pasted_image
-from operator_display import (
-    build_lr_fix_plan,
-    draw_rim_overlay,
-    draw_target_vs_actual,
-    roll_is_borderline,
-    roll_is_ready,
-)
+import operator_display as op_display
 from springback.defaults import get_default_setup, setup_to_json
-from springback.ui import apply_theme
+from springback.ui import apply_theme, lr_hero, start_badge, step_label, step_label_row
 from workflow import ensure_workflow_state, publish_rim_equation
 
+op_display = importlib.reload(op_display)
+build_lr_fix_plan = op_display.build_lr_fix_plan
+draw_rim_overlay = op_display.draw_rim_overlay
+draw_target_vs_actual = op_display.draw_target_vs_actual
+roll_is_borderline = op_display.roll_is_borderline
+roll_is_ready = op_display.roll_is_ready
+worst_smooth_spot = op_display.worst_smooth_spot
+SPOT_TOLERANCE_PCT = op_display.SPOT_TOLERANCE_PCT
+WORST_SPOT_VISUAL_MIN_PCT = op_display.WORST_SPOT_VISUAL_MIN_PCT
+
 st.set_page_config(
-    page_title="Check roll",
+    page_title="Check roll — ready to weld?",
+    page_icon=str(LOGO_PATH),
     layout="centered",
     initial_sidebar_state="collapsed",
 )
 apply_theme()
 
 def _lr_hero(l_mm: float, r_mm: float, *, highlight: bool = False) -> str:
-    cls = "lr-hero-tile highlight" if highlight else "lr-hero-tile"
-    return f"""
-    <div class="lr-hero">
-      <div class="{cls}"><div class="lab">L</div><div class="val">{l_mm:.0f}</div></div>
-      <div class="{cls}"><div class="lab">R</div><div class="val">{r_mm:.0f}</div></div>
-    </div>
-    """
+    return lr_hero(l_mm, r_mm, highlight=highlight)
 
 
 def _start_badge(start_lr: dict) -> str:
-    if start_lr.get("verified"):
-        return '<span class="badge badge-verified">Verified</span>'
-    if start_lr.get("source") in ("chart_anchor", "chart_calibrated"):
-        return '<span class="badge badge-fill">Chart</span>'
-    return '<span class="badge badge-estimate">Estimate</span>'
+    return start_badge(start_lr)
 
 
 @st.cache_data(show_spinner=False)
@@ -90,10 +87,55 @@ def _zone_overlay_image(result: dict) -> Image.Image:
     fig, ax = plt.subplots(figsize=(4.6, 4.6))
     draw_rim_overlay(ax, result, outside=False)
     buf = BytesIO()
-    fig.savefig(buf, format="png", bbox_inches="tight", dpi=100)
+    fig.savefig(buf, format="png", bbox_inches="tight", dpi=200)
     plt.close(fig)
     buf.seek(0)
     return Image.open(buf).convert("RGB")
+
+
+def _show_check_roll_overlay(slot) -> None:
+    slot.markdown(
+        """
+        <div class="check-roll-overlay" role="status" aria-live="polite">
+          <div class="check-roll-loader">
+            <div class="check-roll-loader__topline">
+              <span>Roll formation check</span>
+              <span class="check-roll-loader__live">Live</span>
+            </div>
+            <h2>Checking roll</h2>
+            <p>
+              Reading the photo, tracing the rim, and checking for smooth bends,
+              flats, or tight spots. First check can take 30+ seconds.
+            </p>
+            <div class="check-roll-loader__track" aria-hidden="true"></div>
+            <div class="check-roll-loader__steps" aria-hidden="true">
+              <div class="check-roll-loader__step">Photo calibration</div>
+              <div class="check-roll-loader__step">Rim detection</div>
+              <div class="check-roll-loader__step">Correction map</div>
+            </div>
+          </div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+
+def _scroll_to_check_roll_result() -> None:
+    components.html(
+        """
+        <script>
+        (function () {
+            const doc = window.parent.document;
+            const target = doc.getElementById("check-roll-result");
+            if (!target) return;
+            window.setTimeout(function () {
+                target.scrollIntoView({ behavior: "smooth", block: "start" });
+            }, 120);
+        })();
+        </script>
+        """,
+        height=0,
+    )
 
 
 ensure_workflow_state()
@@ -108,9 +150,13 @@ material = setup["material"]
 
 render_top_menu(
     active="check",
-    title_html='<div class="app-title">Check roll</div>',
+    title_html=(
+        '<div class="app-title">Check roll formation</div>'
+        
+    ),
 )
 
+st.markdown('<p class="step-label">Job</p>', unsafe_allow_html=True)
 job = render_shop_job_inputs(setup, compact=True)
 job_diameter_in = job["diameter_in"]
 thickness_in = job["thickness_in"]
@@ -134,7 +180,9 @@ if not job_missing and thickness_in is not None:
 
 if start_lr:
     st.markdown(
-        f'<p class="step-label">Start L / R (mm) {_start_badge(start_lr)}</p>',
+        f'<div class="step-label-row">'
+        f'<p class="step-label">Start L/R mm</p>{_start_badge(start_lr)}'
+        f'</div>',
         unsafe_allow_html=True,
     )
     st.markdown(
@@ -148,42 +196,52 @@ elif chart_matches and not job_missing:
         f"L {float(tip['l_axis_mm']):.0f} / R {float(tip['r_axis_mm']):.0f} mm"
     )
 
-st.markdown('<p class="step-label">Photo</p>', unsafe_allow_html=True)
-photo_source = st.radio(
-    "Photo source",
-    ("Upload", "Take photo"),
-    horizontal=True,
-    key="quick_photo_source_v2",
-    label_visibility="collapsed",
+_PHOTO_HELP = (
+    "Clear photo of the rolled opening, centered in frame. "
+    "Good lighting helps — avoid heavy glare on the rim."
 )
+
+st.markdown(
+    f'<p class="step-label">Photo'
+    f'<span class="step-help" title="{_PHOTO_HELP}">?</span></p>',
+    unsafe_allow_html=True,
+)
+st.markdown('<span class="photo-source-picker" aria-hidden="true"></span>', unsafe_allow_html=True)
+_pick1, _pick2 = st.columns(2, gap="small")
+_photo_source = st.session_state.get("quick_photo_source_v2", "Upload")
+with _pick1:
+    if st.button(
+        "Upload",
+        use_container_width=True,
+        type="primary" if _photo_source == "Upload" else "secondary",
+        key="pick_upload",
+    ):
+        st.session_state["quick_photo_source_v2"] = "Upload"
+        st.rerun()
+with _pick2:
+    if st.button(
+        "Take photo",
+        use_container_width=True,
+        type="primary" if _photo_source == "Take photo" else "secondary",
+        key="pick_camera",
+    ):
+        st.session_state["quick_photo_source_v2"] = "Take photo"
+        st.rerun()
+photo_source = st.session_state.get("quick_photo_source_v2", "Upload")
 
 photo_bytes = None
 if photo_source == "Upload":
     uploaded = st.file_uploader(
-        "Upload or paste one photo",
+        "Photo file",
         type=["jpg", "jpeg", "png", "webp"],
         accept_multiple_files=False,
         key="quick_upload",
-        help="Pick a file, or copy a screenshot and press Ctrl+V / Cmd+V.",
+        label_visibility="collapsed",
     )
     if isinstance(uploaded, list):
         uploaded = uploaded[0] if uploaded else None
-    pasted = listen_for_pasted_image(key="quick_paste")
-    if pasted and pasted != st.session_state.get("quick_paste_bytes"):
-        st.session_state["quick_paste_bytes"] = pasted
-        st.session_state["quick_photo_pick"] = "paste"
-    upload_id = None
     if uploaded is not None:
-        upload_id = f"{getattr(uploaded, 'name', 'file')}:{getattr(uploaded, 'size', len(uploaded.getvalue()))}"
-        if upload_id != st.session_state.get("quick_upload_id"):
-            st.session_state["quick_upload_id"] = upload_id
-            st.session_state["quick_photo_pick"] = "upload"
-    if st.session_state.get("quick_photo_pick") == "paste" and st.session_state.get("quick_paste_bytes"):
-        photo_bytes = st.session_state["quick_paste_bytes"]
-    elif uploaded is not None:
         photo_bytes = uploaded.getvalue()
-    elif st.session_state.get("quick_paste_bytes"):
-        photo_bytes = st.session_state["quick_paste_bytes"]
 else:
     captured = st.session_state.get("quick_camera_bytes")
     if captured:
@@ -195,8 +253,9 @@ else:
         photo_bytes = captured
     else:
         shot = st.camera_input(
-            "Take one photo of the opening",
+            "Camera",
             key="quick_camera",
+            label_visibility="collapsed",
         )
         if shot is not None:
             st.session_state.quick_camera_bytes = shot.getvalue()
@@ -218,103 +277,107 @@ if run and photo_bytes is not None and not job_missing:
     improve_rim = True
     auto_crop = True
     st.session_state.setup = copy.deepcopy(setup)
-    with st.spinner("Checking photo — first check may take 30+ seconds…"):
-        try:
-            st.session_state.pop("quick_error", None)
-            st.session_state.pop("quick_overlay_png", None)
-            st.session_state.pop("quick_compare_png", None)
-            st.session_state.pop("quick_plot_token", None)
-            image_bytes = photo_bytes
-            cv_settings = dict(DEFAULT_CV_SETTINGS)
-            cv_settings["num_points"] = 180
-            cv_settings["use_auto_crop"] = auto_crop
-            ai_status = {
-                "used": False,
-                "verdict": None,
-                "notes": "",
-                "retried": False,
-                "error": None,
-            }
-            api_key = ai.resolve_api_key() if improve_rim else None
-            photo = Image.open(BytesIO(image_bytes)).convert("RGB")
-            if improve_rim and api_key:
-                try:
-                    photo_cal = ai.check_photo_and_calibrate(
-                        api_key,
-                        photo,
-                        current_settings=cv_settings,
-                    )
-                    cv_settings = ai.merge_check_roll_settings(
-                        cv_settings, photo_cal.get("suggestions")
-                    )
-                    cv_settings["num_points"] = 180
-                    ai_status["used"] = True
-                    ai_status["verdict"] = photo_cal.get("verdict")
-                    ai_status["notes"] = photo_cal.get("notes") or ""
-                except Exception as exc:
-                    ai_status["error"] = str(exc)
-            elif improve_rim:
-                ai_status["error"] = "no_key"
+    loading_overlay = st.empty()
+    _show_check_roll_overlay(loading_overlay)
+    try:
+        st.session_state.pop("quick_error", None)
+        st.session_state.pop("quick_overlay_png", None)
+        st.session_state.pop("quick_compare_png", None)
+        st.session_state.pop("quick_plot_token", None)
+        image_bytes = photo_bytes
+        cv_settings = dict(DEFAULT_CV_SETTINGS)
+        cv_settings["num_points"] = 180
+        cv_settings["use_auto_crop"] = auto_crop
+        ai_status = {
+            "used": False,
+            "verdict": None,
+            "notes": "",
+            "retried": False,
+            "error": None,
+        }
+        api_key = ai.resolve_api_key() if improve_rim else None
+        photo = Image.open(BytesIO(image_bytes)).convert("RGB")
+        if improve_rim and api_key:
+            try:
+                photo_cal = ai.check_photo_and_calibrate(
+                    api_key,
+                    photo,
+                    current_settings=cv_settings,
+                )
+                cv_settings = ai.merge_check_roll_settings(
+                    cv_settings, photo_cal.get("suggestions")
+                )
+                cv_settings["num_points"] = 180
+                ai_status["used"] = True
+                ai_status["verdict"] = photo_cal.get("verdict")
+                ai_status["notes"] = photo_cal.get("notes") or ""
+            except Exception as exc:
+                ai_status["error"] = str(exc)
+        elif improve_rim:
+            ai_status["error"] = "no_key"
 
-            result = run_quick_pipeline(
-                image_bytes,
-                setup,
-                real_radius_inches=float(real_radius_inches),
-                cv_settings=cv_settings,
-                detector=None,
-                solver_sample_count=1500,
-                include_schedule=True,
-            )
+        result = run_quick_pipeline(
+            image_bytes,
+            setup,
+            real_radius_inches=float(real_radius_inches),
+            cv_settings=cv_settings,
+            detector=None,
+            solver_sample_count=1500,
+            include_schedule=True,
+        )
 
-            # Optional second OpenAI pass only when improve is on and first check failed.
-            if (
-                improve_rim
-                and api_key
-                and not roll_is_ready(result)
-            ):
-                try:
-                    review = ai.review_rim_tracking(
-                        api_key,
-                        original=photo,
-                        overlay=_zone_overlay_image(result),
-                        current_settings=cv_settings,
+        # Optional second OpenAI pass only when improve is on and first check failed.
+        if (
+            improve_rim
+            and api_key
+            and not roll_is_ready(result)
+        ):
+            try:
+                review = ai.review_rim_tracking(
+                    api_key,
+                    original=photo,
+                    overlay=_zone_overlay_image(result),
+                    current_settings=cv_settings,
+                )
+                if not review.get("rim_ok"):
+                    retry_settings = ai.merge_check_roll_settings(
+                        cv_settings, review.get("suggestions")
                     )
-                    if not review.get("rim_ok"):
-                        retry_settings = ai.merge_check_roll_settings(
-                            cv_settings, review.get("suggestions")
+                    retry_settings["num_points"] = 180
+                    if retry_settings != cv_settings:
+                        cv_settings = retry_settings
+                        result = run_quick_pipeline(
+                            image_bytes,
+                            setup,
+                            real_radius_inches=float(real_radius_inches),
+                            cv_settings=cv_settings,
+                            detector=None,
+                            solver_sample_count=1500,
+                            include_schedule=True,
                         )
-                        retry_settings["num_points"] = 180
-                        if retry_settings != cv_settings:
-                            cv_settings = retry_settings
-                            result = run_quick_pipeline(
-                                image_bytes,
-                                setup,
-                                real_radius_inches=float(real_radius_inches),
-                                cv_settings=cv_settings,
-                                detector=None,
-                                solver_sample_count=1500,
-                                include_schedule=True,
-                            )
-                            ai_status["retried"] = True
-                            if review.get("issue"):
-                                ai_status["notes"] = review["issue"]
-                except Exception:
-                    pass
+                        ai_status["retried"] = True
+                        if review.get("issue"):
+                            ai_status["notes"] = review["issue"]
+            except Exception:
+                pass
 
-            st.session_state["quick_result"] = result
-            st.session_state["quick_ai_status"] = ai_status
-            publish_rim_equation(
-                result["rim_equation_export"],
-                target_radius_inches=float(material["target_final_radius_in"]),
-                source="check_roll",
-                meta={"pixels_per_inch": result["correction"]["pixels_per_inch"]},
-            )
-        except PipelineError as exc:
-            st.session_state["quick_result"] = None
-            st.session_state["quick_error"] = str(exc)
-        except Exception as exc:
-            st.session_state["quick_result"] = None
-            st.session_state["quick_error"] = f"Could not check this photo: {exc}"
+        st.session_state["quick_result"] = result
+        st.session_state["quick_ai_status"] = ai_status
+        publish_rim_equation(
+            result["rim_equation_export"],
+            target_radius_inches=float(material["target_final_radius_in"]),
+            source="check_roll",
+            meta={"pixels_per_inch": result["correction"]["pixels_per_inch"]},
+        )
+        st.session_state["quick_scroll_to_result"] = True
+    except PipelineError as exc:
+        st.session_state["quick_result"] = None
+        st.session_state["quick_error"] = str(exc)
+    except Exception as exc:
+        st.session_state["quick_result"] = None
+        st.session_state["quick_error"] = f"Could not check this photo: {exc}"
+    finally:
+        loading_overlay.empty()
 
 if st.session_state.get("quick_error") and not st.session_state.get("quick_result"):
     st.error(st.session_state["quick_error"])
@@ -325,8 +388,10 @@ if result:
     st.session_state.pop("quick_error", None)
     ready = roll_is_ready(result)
     borderline = roll_is_borderline(result)
-    within_pct = float(result["correction"]["within_tolerance_percent"])
-    tol_pct = float(result.get("curvature_tolerance") or 5.0)
+    smooth_pct = float(result["correction"]["within_tolerance_percent"])
+    worst_spot_pct = float(result["correction"].get("max_abs_smooth_error_percent") or 0.0)
+    worst_spot = worst_smooth_spot(result)
+    tol_pct = float(result.get("curvature_tolerance") or SPOT_TOLERANCE_PCT)
     size_label = f"{job_diameter_in:.0f}"
 
     fix_start = start_lr
@@ -344,13 +409,19 @@ if result:
         except Exception:
             fix_start = None
 
+    st.markdown('<div id="check-roll-result" class="result-anchor"></div>', unsafe_allow_html=True)
+    if st.session_state.pop("quick_scroll_to_result", False):
+        _scroll_to_check_roll_result()
     st.markdown("---")
     if ready:
         st.markdown(
             f"""
             <div class="verdict-pass">
-              <h2>Ready</h2>
-              <p>{size_label}&quot; — {within_pct:.0f}% of rim within ±{tol_pct:.0f}% · OK to weld</p>
+              <div class="verdict-body">
+                <h2>Smooth</h2>
+                <p>{size_label}&quot; — {smooth_pct:.0f}% smooth bend · worst spot {worst_spot_pct:.0f}% · OK to weld if template fits</p>
+              </div>
+              <div class="verdict-icon verdict-icon-pass" aria-hidden="true">👍</div>
             </div>
             """,
             unsafe_allow_html=True,
@@ -359,8 +430,8 @@ if result:
         st.markdown(
             f"""
             <div class="verdict-borderline">
-              <h2>Borderline</h2>
-              <p>{size_label}&quot; — {within_pct:.0f}% round · trust the hanging template</p>
+              <h2>Mostly smooth</h2>
+              <p>{size_label}&quot; — {smooth_pct:.0f}% smooth bend · worst spot {worst_spot_pct:.0f}% · template decides final fit</p>
             </div>
             """,
             unsafe_allow_html=True,
@@ -368,8 +439,8 @@ if result:
         st.markdown(
             """
             <div class="action-card warn">
-              <p style="margin:0">Photo sees minor oval spots — often glare, angle, or post-weld shape.
-              If the template fits, proceed. Photo again before roll if you are still forming.</p>
+              <p style="margin:0">Photo sees minor flat/tight spots. Ignore perfect roundness here:
+              if the curve is smooth and the template fits, proceed. Photo again if you are still forming.</p>
             </div>
             """,
             unsafe_allow_html=True,
@@ -378,13 +449,25 @@ if result:
         st.markdown(
             f"""
             <div class="verdict-fail">
-              <h2>Not ready</h2>
-              <p>{size_label}&quot; — {within_pct:.0f}% round · fix on Bertsch, then photo again</p>
+              <h2>Needs smoothing</h2>
+              <p>{size_label}&quot; — {smooth_pct:.0f}% smooth bend · worst spot {worst_spot_pct:.0f}% · fix flats/tight spots, then photo again</p>
             </div>
             """,
             unsafe_allow_html=True,
         )
 
+    if worst_spot_pct >= tol_pct:
+        st.markdown(
+            f"""
+            <div class="action-card primary">
+              <h3>{worst_spot['clock']} - {worst_spot['action']}</h3>
+              <p style="margin:0">Smooth this area first.</p>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
+
+    if not ready:
         plan = (
             build_lr_fix_plan(result, fix_start)
             if fix_start
@@ -394,7 +477,7 @@ if result:
 
         if mode == "single":
             st.markdown(
-                '<p class="step-label">Set on Jog (mm)</p>',
+                '<p class="step-label">Set on jog</p>',
                 unsafe_allow_html=True,
             )
             st.markdown(
@@ -418,7 +501,7 @@ if result:
             first = plan["moves"][0]
             rest = plan["moves"][1:]
             st.markdown(
-                '<p class="step-label">Fix this spot first</p>',
+                '<p class="step-label">Fix first</p>',
                 unsafe_allow_html=True,
             )
             st.markdown(
@@ -450,7 +533,7 @@ if result:
             st.markdown(
                 """
                 <div class="action-card">
-                  <p style="margin:0">Shape is off — check the template and take another photo.</p>
+                  <p style="margin:0">The curve is not reading smooth enough — check the template and take another photo.</p>
                 </div>
                 """,
                 unsafe_allow_html=True,
@@ -463,7 +546,9 @@ if result:
     except TypeError:
         rim_n = 0
     plot_token = (
-        f"v4:{float(result['correction']['within_tolerance_percent']):.2f}:"
+        f"v5:{float(result['correction']['within_tolerance_percent']):.2f}:"
+        f"{float(result['correction'].get('max_abs_smooth_error_percent') or 0):.2f}:"
+        f"{int(result['correction'].get('worst_smooth_idx') or 0)}:"
         f"{rim_n}:"
         f"{float(result.get('real_radius_inches') or 0):.4f}"
     )
@@ -473,8 +558,7 @@ if result:
         buf1 = BytesIO()
         fig, ax = plt.subplots(figsize=(4.6, 4.6))
         draw_rim_overlay(ax, result, outside=True)
-        ax.set_title("Red = add bend · Blue = ease off · Green = OK")
-        fig.savefig(buf1, format="png", bbox_inches="tight", dpi=100)
+        fig.savefig(buf1, format="png", bbox_inches="tight", dpi=200)
         plt.close(fig)
         buf1.seek(0)
         st.session_state["quick_overlay_png"] = buf1.getvalue()
@@ -482,8 +566,7 @@ if result:
         buf2 = BytesIO()
         fig2, ax2 = plt.subplots(figsize=(4.6, 4.6))
         draw_target_vs_actual(ax2, result)
-        ax2.set_title("Dashed = target · Orange = actual")
-        fig2.savefig(buf2, format="png", bbox_inches="tight", dpi=100)
+        fig2.savefig(buf2, format="png", bbox_inches="tight", dpi=200)
         plt.close(fig2)
         buf2.seek(0)
         st.session_state["quick_compare_png"] = buf2.getvalue()
@@ -491,8 +574,15 @@ if result:
 
     with st.expander("Photo detail", expanded=(not ready and not borderline)):
         if st.session_state.get("quick_overlay_png"):
+            st.markdown("**Red = Add Bend · Blue = Ease Off · Green = OK**")
+            if worst_spot_pct >= WORST_SPOT_VISUAL_MIN_PCT:
+                st.caption(
+                    f"Bright arc + dot mark the worst spot ({worst_spot['clock']} — "
+                    f"{worst_spot['action'].split('(')[0].strip()})."
+                )
             st.image(st.session_state["quick_overlay_png"], use_container_width=True)
         if st.session_state.get("quick_compare_png"):
+            st.markdown("**Dashed = Smooth Reference · Orange = Detected Rim**")
             st.image(st.session_state["quick_compare_png"], use_container_width=True)
 
         ai_status = st.session_state.get("quick_ai_status") or {}
@@ -505,7 +595,7 @@ if result:
         if not ready and fix_start:
             plan = build_lr_fix_plan(result, fix_start)
             if plan.get("mode") == "single" and plan.get("moves"):
-                st.caption("Spots that agreed:")
+                st.caption("Smoothness spots that agreed:")
                 for move in plan["moves"]:
                     st.markdown(f"- {move['short_line']}")
 
@@ -522,4 +612,3 @@ if result:
                     yield_psi=float(yield_psi) if yield_psi is not None else None,
                 )
                 st.switch_page("pages/2_Correct.py")
-

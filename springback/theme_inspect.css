@@ -1,0 +1,39 @@
+/* Inspect page — wide layout only (visual tokens live in theme.css). */
+
+.block-container,
+[data-testid="stMainBlockContainer"] {
+    max-width: 1500px !important;
+}
+
+div[data-testid="stMetric"] {
+    background-color: #FFFFFF !important;
+    border: 2px solid #111111 !important;
+    border-radius: 0 !important;
+    padding: 14px !important;
+    box-shadow: none !important;
+}
+
+div[data-testid="stMetricLabel"] {
+    font-family: "JetBrains Mono", Consolas, monospace !important;
+    font-size: 0.68rem !important;
+    letter-spacing: 0.1em !important;
+    text-transform: uppercase !important;
+    color: #5c5c58 !important;
+}
+
+div[data-testid="stMetricValue"] {
+    font-family: "Archivo Black", Arial, sans-serif !important;
+    font-size: 1.35rem !important;
+    line-height: 1.05 !important;
+    letter-spacing: -0.03em !important;
+}
+
+@media (max-width: 768px) {
+    div[data-testid="stMetricValue"] {
+        font-size: 1.15rem !important;
+    }
+
+    .info-card {
+        padding: 14px !important;
+    }
+}

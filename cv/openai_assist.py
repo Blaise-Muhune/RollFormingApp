@@ -820,6 +820,7 @@ def build_result_metrics(
     return {
         "target_radius_inches": round(float(target_radius_inches), 3),
         "target_radius_pixels": round(float(target_radius_pixels), 2),
+        "smooth_bend_percent": round(float(within_tolerance_percent), 2),
         "within_tolerance_percent": round(float(within_tolerance_percent), 2),
         # Display convention in the dashboard: flat vs tight labels for operators.
         "too_flat_percent_display": round(float(too_tight_percent), 2),
@@ -834,7 +835,7 @@ def build_result_metrics(
         "rim_fit_rmse_pixels": round(float(rim_rmse_px), 2),
         "angle_convention": "theta=0 at right of image; increases counterclockwise",
         "zone_colors": {
-            "green": "within tolerance",
+            "green": "smooth bend / within tolerance",
             "blue": "too flat — increase force",
             "red": "too tight — decrease force",
         },

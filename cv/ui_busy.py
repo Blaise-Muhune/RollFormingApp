@@ -40,43 +40,14 @@ def render_busy_screen(message: str, detail: str = "") -> None:
     """Dedicated in-app loading view (no competing action buttons)."""
     detail = detail or "Please wait — don't change settings or click other buttons."
     st.markdown(
-        f"""
-        <div style="
-            min-height: 55vh;
-            display: flex;
-            flex-direction: column;
-            align-items: center;
-            justify-content: center;
-            text-align: center;
-            gap: 0.75rem;
-            padding: 2rem;
-        ">
-            <div style="
-                width: 52px;
-                height: 52px;
-                border-radius: 50%;
-                border: 4px solid rgba(96,165,250,0.25);
-                border-top-color: #60a5fa;
-                animation: rfspin 0.9s linear infinite;
-            "></div>
-            <h2 style="margin: 0.5rem 0 0 0;">{message}</h2>
-            <p style="color: #9ca3af; max-width: 34rem; margin: 0;">{detail}</p>
-        </div>
-        <style>
-        @keyframes rfspin {{
-            to {{ transform: rotate(360deg); }}
-        }}
-        section[data-testid="stSidebar"] {{
-            pointer-events: none !important;
-            opacity: 0.45 !important;
-            filter: grayscale(0.2);
-        }}
-        div[data-testid="stToolbar"],
-        div[data-testid="stDecoration"] {{
-            pointer-events: none !important;
-        }}
-        </style>
-        """,
+        f'<div style="min-height:50vh;display:flex;flex-direction:column;align-items:center;'
+        f'justify-content:center;text-align:center;gap:0.75rem;padding:1.25rem 1rem;">'
+        f'<div style="width:52px;height:52px;border-radius:0;'
+        f'border:4px solid rgba(17,17,17,0.15);border-top-color:#111111;'
+        f'animation:rfspin 0.9s linear infinite;"></div>'
+        f'<h2 style="margin:0.5rem 0 0 0;font-size:clamp(1.1rem,4vw,1.35rem);">{message}</h2>'
+        f'<p style="color:#5c5c58;max-width:min(34rem,92vw);margin:0;line-height:1.45;">{detail}</p>'
+        f'</div>',
         unsafe_allow_html=True,
     )
 
@@ -100,31 +71,32 @@ def lock_ui(message: str, detail: str = "") -> None:
           position: fixed;
           inset: 0;
           z-index: 2147483646;
-          background: rgba(15, 23, 42, 0.78);
+          background: rgba(244, 244, 240, 0.92);
           display: flex;
           align-items: center;
           justify-content: center;
           backdrop-filter: blur(3px);
+          padding: max(1rem, env(safe-area-inset-top, 0px)) max(1rem, env(safe-area-inset-right, 0px)) max(1rem, env(safe-area-inset-bottom, 0px)) max(1rem, env(safe-area-inset-left, 0px));
         `;
         el.innerHTML = `
           <div style="
             text-align: center;
-            color: #f9fafb;
+            color: #111111;
             font-family: system-ui, -apple-system, Segoe UI, sans-serif;
-            max-width: 28rem;
-            padding: 1.5rem;
+            max-width: min(28rem, 92vw);
+            padding: 1.25rem;
           ">
             <div style="
               width: 52px; height: 52px; margin: 0 auto 1rem auto;
-              border-radius: 50%;
-              border: 4px solid rgba(96,165,250,0.25);
-              border-top-color: #60a5fa;
+              border-radius: 0;
+              border: 4px solid rgba(17,17,17,0.15);
+              border-top-color: #111111;
               animation: rfspin 0.9s linear infinite;
             "></div>
-            <div style="font-size: 1.35rem; font-weight: 650; margin-bottom: 0.5rem;">
+            <div style="font-size: clamp(1.05rem, 4vw, 1.35rem); font-weight: 700; margin-bottom: 0.5rem;">
               ${{payload.message}}
             </div>
-            <div style="font-size: 0.95rem; color: #d1d5db; line-height: 1.45;">
+            <div style="font-size: 0.92rem; color: #5c5c58; line-height: 1.45;">
               ${{payload.detail}}
             </div>
           </div>
