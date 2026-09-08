@@ -302,12 +302,6 @@ h1, h2, h3, h4, p, label, li, .stMarkdown, .stCaption,
 }
 
 /* Logo row: sit on the black band, centered, larger */
-div[data-testid="stHorizontalBlock"]:has(.app-brand-logo-flag),
-div[data-testid="stHorizontalBlock"]:has(+ div):has([data-testid="stImage"]) {
-    /* fallback — primary selector below */
-}
-
-/* Streamlit puts the flag markdown in its own block; target the next image row */
 div[data-testid="stElementContainer"]:has(.app-brand-logo-flag)
     + div[data-testid="stElementContainer"]
     div[data-testid="stHorizontalBlock"],
