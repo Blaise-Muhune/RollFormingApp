@@ -278,44 +278,74 @@ h1, h2, h3, h4, p, label, li, .stMarkdown, .stCaption,
     align-items: center !important;
 }
 
-.app-brand-band .app-logo-band {
-    height: 2.65rem !important;
-    width: auto !important;
-    max-width: min(16rem, 85vw) !important;
-    object-fit: contain !important;
-    display: inline-block !important;
-    vertical-align: middle !important;
-    background: #111111 !important;
+.app-brand-band--bg {
+    height: 5.25rem !important;
+    margin-bottom: -4.55rem !important;
+    padding: 0 !important;
+    border-bottom: 2px solid #111111 !important;
+}
+
+.app-brand-band-spacer {
+    height: 1rem !important;
 }
 
 .app-brand-fallback {
     font-family: "Archivo Black", Arial, sans-serif !important;
     color: #ffffff !important;
-    font-size: 0.9rem !important;
-    letter-spacing: 0.1em !important;
+    font-size: 0.95rem !important;
+    letter-spacing: 0.12em !important;
     text-transform: uppercase !important;
+    text-align: center !important;
+    position: relative !important;
+    z-index: 3 !important;
+    margin: 0.85rem 0 0.35rem 0 !important;
 }
 
-/* Logo iframe: full-bleed black band, centered, no Streamlit chrome */
-div[data-testid="stElementContainer"]:has(iframe[height="76"]),
-div[data-testid="element-container"]:has(iframe[height="76"]) {
-    width: 100vw !important;
-    max-width: 100vw !important;
-    margin: 0 calc(50% - 50vw) 0.85rem calc(50% - 50vw) !important;
-    padding: 0 !important;
-    background: #111111 !important;
-    border-bottom: 2px solid #111111 !important;
+/* Logo row: sit on the black band, centered, larger */
+div[data-testid="stHorizontalBlock"]:has(.app-brand-logo-flag),
+div[data-testid="stHorizontalBlock"]:has(+ div):has([data-testid="stImage"]) {
+    /* fallback — primary selector below */
 }
 
-div[data-testid="stElementContainer"]:has(iframe[height="76"]) iframe,
-div[data-testid="element-container"]:has(iframe[height="76"]) iframe {
+/* Streamlit puts the flag markdown in its own block; target the next image row */
+div[data-testid="stElementContainer"]:has(.app-brand-logo-flag)
+    + div[data-testid="stElementContainer"]
+    div[data-testid="stHorizontalBlock"],
+div[data-testid="element-container"]:has(.app-brand-logo-flag)
+    + div[data-testid="element-container"]
+    div[data-testid="stHorizontalBlock"] {
+    position: relative !important;
+    z-index: 3 !important;
+    align-items: center !important;
+    margin: 0 !important;
+    padding: 0.55rem 0 0.35rem 0 !important;
+}
+
+div[data-testid="stElementContainer"]:has(.app-brand-logo-flag)
+    + div[data-testid="stElementContainer"]
+    [data-testid="stImage"],
+div[data-testid="element-container"]:has(.app-brand-logo-flag)
+    + div[data-testid="element-container"]
+    [data-testid="stImage"] {
+    text-align: center !important;
+}
+
+div[data-testid="stElementContainer"]:has(.app-brand-logo-flag)
+    + div[data-testid="stElementContainer"]
+    [data-testid="stImage"] img,
+div[data-testid="element-container"]:has(.app-brand-logo-flag)
+    + div[data-testid="element-container"]
+    [data-testid="stImage"] img {
+    max-height: 3.35rem !important;
+    width: auto !important;
+    max-width: 100% !important;
+    object-fit: contain !important;
+    margin: 0 auto !important;
     display: block !important;
-    width: 100% !important;
-    border: 0 !important;
-    background: #111111 !important;
+    background: transparent !important;
 }
 
-span.app-brand-iframe-flag {
+span.app-brand-logo-flag {
     display: none !important;
 }
 

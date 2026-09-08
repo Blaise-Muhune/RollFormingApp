@@ -34,7 +34,7 @@ SPOT_TOLERANCE_PCT = op_display.SPOT_TOLERANCE_PCT
 WORST_SPOT_VISUAL_MIN_PCT = op_display.WORST_SPOT_VISUAL_MIN_PCT
 
 st.set_page_config(
-    page_title="Check roll — ready to weld?",
+    page_title="Check roll",
     page_icon=str(LOGO_PATH),
     layout="centered",
     initial_sidebar_state="collapsed",
@@ -151,7 +151,7 @@ material = setup["material"]
 render_top_menu(
     active="check",
     title_html=(
-        '<div class="app-title">Check roll formation</div>'
+        '<div class="app-title">Check roll</div>'
         
     ),
 )
