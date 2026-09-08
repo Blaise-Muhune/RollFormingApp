@@ -263,13 +263,13 @@ h1, h2, h3, h4, p, label, li, .stMarkdown, .stCaption,
     text-transform: uppercase !important;
 }
 
-/* --- Niles Steel Tank logo band (full-width dark strip) --- */
+/* --- Niles Steel Tank brand band (text only) --- */
 .app-brand-band {
     background: #111111 !important;
     width: 100vw !important;
     max-width: 100vw !important;
     margin: 0 calc(50% - 50vw) 1rem calc(50% - 50vw) !important;
-    padding: 0.75rem 1rem !important;
+    padding: 0.85rem 1rem !important;
     text-align: center !important;
     border-bottom: 2px solid #111111 !important;
     box-sizing: border-box !important;
@@ -278,69 +278,13 @@ h1, h2, h3, h4, p, label, li, .stMarkdown, .stCaption,
     align-items: center !important;
 }
 
-.app-brand-band--bg {
-    height: 5.25rem !important;
-    margin-bottom: -4.55rem !important;
-    padding: 0 !important;
-    border-bottom: 2px solid #111111 !important;
-}
-
-.app-brand-band-spacer {
-    height: 1rem !important;
-}
-
 .app-brand-fallback {
     font-family: "Archivo Black", Arial, sans-serif !important;
     color: #ffffff !important;
     font-size: 0.95rem !important;
-    letter-spacing: 0.12em !important;
+    letter-spacing: 0.14em !important;
     text-transform: uppercase !important;
-    text-align: center !important;
-    position: relative !important;
-    z-index: 3 !important;
-    margin: 0.85rem 0 0.35rem 0 !important;
-}
-
-/* Logo row: sit on the black band, centered, larger */
-div[data-testid="stElementContainer"]:has(.app-brand-logo-flag)
-    + div[data-testid="stElementContainer"]
-    div[data-testid="stHorizontalBlock"],
-div[data-testid="element-container"]:has(.app-brand-logo-flag)
-    + div[data-testid="element-container"]
-    div[data-testid="stHorizontalBlock"] {
-    position: relative !important;
-    z-index: 3 !important;
-    align-items: center !important;
     margin: 0 !important;
-    padding: 0.55rem 0 0.35rem 0 !important;
-}
-
-div[data-testid="stElementContainer"]:has(.app-brand-logo-flag)
-    + div[data-testid="stElementContainer"]
-    [data-testid="stImage"],
-div[data-testid="element-container"]:has(.app-brand-logo-flag)
-    + div[data-testid="element-container"]
-    [data-testid="stImage"] {
-    text-align: center !important;
-}
-
-div[data-testid="stElementContainer"]:has(.app-brand-logo-flag)
-    + div[data-testid="stElementContainer"]
-    [data-testid="stImage"] img,
-div[data-testid="element-container"]:has(.app-brand-logo-flag)
-    + div[data-testid="element-container"]
-    [data-testid="stImage"] img {
-    max-height: 3.35rem !important;
-    width: auto !important;
-    max-width: 100% !important;
-    object-fit: contain !important;
-    margin: 0 auto !important;
-    display: block !important;
-    background: transparent !important;
-}
-
-span.app-brand-logo-flag {
-    display: none !important;
 }
 
 /* --- Typography --- */
