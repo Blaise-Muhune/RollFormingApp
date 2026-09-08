@@ -10,6 +10,8 @@ venv/
 uploads/*
 !uploads/.gitkeep
 
-# Local outputs
+# Local outputs / generated images
 *.png
 !assets/
+!static/
+!static/**/*.png
