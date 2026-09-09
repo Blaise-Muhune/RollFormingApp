@@ -8,8 +8,8 @@ SPOT_TOLERANCE_PCT = 5.0
 # Minimum % of rim within ±SPOT_TOLERANCE to pass / borderline.
 SMOOTH_PASS_MIN_PCT = 85.0
 SMOOTH_BORDERLINE_MIN_PCT = 75.0
-# Worst-spot ceiling for borderline (above SPOT_TOLERANCE_PCT, up to here).
-BORDERLINE_WORST_MAX_PCT = 8.0
+# Worst-spot ceiling for borderline (must be >= SPOT_TOLERANCE_PCT).
+BORDERLINE_WORST_MAX_PCT = 2.0
 # Show bright worst-spot arc on photo overlay (visual early warning only).
 WORST_SPOT_VISUAL_MIN_PCT = 3.0
 

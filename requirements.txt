@@ -7,8 +7,10 @@
 #
 # Notes:
 # - Python 3.10+ recommended.
-# - GroundingDINO weights may download on first Inspect run via Hugging Face.
-# - torch/torchvision are only required for the Inspect (CV) stage.
+# - GroundingDINO weights may download on first Inspect/Check-roll auto-crop.
+# - Optional SAM refine (facebook/sam-vit-base) downloads on first use; if it
+#   fails (RAM/offline), GrabCut + RANSAC ellipse/circle seed still runs.
+# - torch/torchvision are required for GroundingDINO and optional SAM.
 # - Correct (springback) stage works with numpy/matplotlib/plotly alone if you
 #   only load a rim-equation JSON.
 

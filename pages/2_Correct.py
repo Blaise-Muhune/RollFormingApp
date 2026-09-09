@@ -25,7 +25,7 @@ from bertsch_chart import (
     render_shop_job_inputs,
 )
 from advanced_nav import render_top_menu
-from branding import LOGO_PATH
+from branding import PAGE_ICON
 from workflow import (
     get_inspect_target_radius,
     get_rim_equation_json,
@@ -581,7 +581,7 @@ def main():
     """Operator-first calculator: L/R to set, engineering details collapsed."""
     st.set_page_config(
         page_title="Correct adjustment",
-        page_icon=str(LOGO_PATH),
+        page_icon=PAGE_ICON,
         layout="centered",
         initial_sidebar_state="collapsed",
     )

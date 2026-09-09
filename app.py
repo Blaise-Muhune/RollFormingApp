@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import copy
+import hashlib
 import importlib
 from io import BytesIO
 
@@ -11,7 +12,7 @@ import streamlit.components.v1 as components
 from PIL import Image
 
 from advanced_nav import render_top_menu
-from branding import LOGO_PATH
+from branding import PAGE_ICON
 from bertsch_chart import (
     resolve_start_lr,
     render_shop_job_inputs,
@@ -35,7 +36,7 @@ WORST_SPOT_VISUAL_MIN_PCT = op_display.WORST_SPOT_VISUAL_MIN_PCT
 
 st.set_page_config(
     page_title="Check roll",
-    page_icon=str(LOGO_PATH),
+    page_icon=PAGE_ICON,
     layout="centered",
     initial_sidebar_state="collapsed",
 )
@@ -249,6 +250,16 @@ else:
         if st.button("Retake"):
             st.session_state.quick_camera_bytes = None
             st.session_state.pop("quick_camera", None)
+            st.session_state.pop("quick_photo_token", None)
+            for _k in (
+                "quick_result",
+                "quick_error",
+                "quick_ai_status",
+                "quick_overlay_png",
+                "quick_compare_png",
+                "quick_plot_token",
+            ):
+                st.session_state.pop(_k, None)
             st.rerun()
         photo_bytes = captured
     else:
@@ -262,19 +273,51 @@ else:
             st.session_state.pop("quick_camera", None)
             st.rerun()
 
-run = st.button(
-    "Check roll",
+# New / changed / cleared photo → drop the previous pass/fail result immediately.
+_photo_token = (
+    hashlib.sha1(photo_bytes).hexdigest() if photo_bytes is not None else None
+)
+_prev_photo_token = st.session_state.get("quick_photo_token")
+if _photo_token != _prev_photo_token:
+    st.session_state["quick_photo_token"] = _photo_token
+    for _k in (
+        "quick_result",
+        "quick_error",
+        "quick_ai_status",
+        "quick_overlay_png",
+        "quick_compare_png",
+        "quick_plot_token",
+        "quick_scroll_to_result",
+    ):
+        st.session_state.pop(_k, None)
+    if _photo_token is not None:
+        st.session_state["quick_pending_check"] = True
+    else:
+        st.session_state.pop("quick_pending_check", None)
+
+_can_check = photo_bytes is not None and not bool(job_missing)
+_auto_check = bool(st.session_state.get("quick_pending_check")) and _can_check
+run_clicked = st.button(
+    "Check again" if st.session_state.get("quick_result") or st.session_state.get("quick_error") else "Check roll",
     type="primary",
     use_container_width=True,
-    disabled=photo_bytes is None or bool(job_missing),
+    disabled=not _can_check,
+    key="quick_check_roll_btn",
 )
-if job_missing:
+if job_missing and photo_bytes is not None:
+    st.caption("Select " + ", ".join(job_missing).lower() + " — check starts when the job is set.")
+elif job_missing:
     st.caption("Select " + ", ".join(job_missing).lower() + " first.")
+elif photo_bytes is None:
+    st.caption("Upload or take a photo — check starts automatically.")
+
+run = bool(run_clicked) or _auto_check
 
 if run and photo_bytes is not None and not job_missing:
     from pipeline import DEFAULT_CV_SETTINGS, PipelineError, run_quick_pipeline
 
-    improve_rim = True
+    st.session_state.pop("quick_pending_check", None)
+    improve_rim = bool(st.session_state.get("quick_improve_rim", False))
     auto_crop = True
     st.session_state.setup = copy.deepcopy(setup)
     loading_overlay = st.empty()
@@ -286,7 +329,6 @@ if run and photo_bytes is not None and not job_missing:
         st.session_state.pop("quick_plot_token", None)
         image_bytes = photo_bytes
         cv_settings = dict(DEFAULT_CV_SETTINGS)
-        cv_settings["num_points"] = 180
         cv_settings["use_auto_crop"] = auto_crop
         ai_status = {
             "used": False,
@@ -307,7 +349,6 @@ if run and photo_bytes is not None and not job_missing:
                 cv_settings = ai.merge_check_roll_settings(
                     cv_settings, photo_cal.get("suggestions")
                 )
-                cv_settings["num_points"] = 180
                 ai_status["used"] = True
                 ai_status["verdict"] = photo_cal.get("verdict")
                 ai_status["notes"] = photo_cal.get("notes") or ""
@@ -343,7 +384,6 @@ if run and photo_bytes is not None and not job_missing:
                     retry_settings = ai.merge_check_roll_settings(
                         cv_settings, review.get("suggestions")
                     )
-                    retry_settings["num_points"] = 180
                     if retry_settings != cv_settings:
                         cv_settings = retry_settings
                         result = run_quick_pipeline(
@@ -380,8 +420,30 @@ if run and photo_bytes is not None and not job_missing:
         loading_overlay.empty()
 
 if st.session_state.get("quick_error") and not st.session_state.get("quick_result"):
-    st.error(st.session_state["quick_error"])
-    st.caption("Retake: center the opening, even light, no glare.")
+    err = str(st.session_state["quick_error"])
+    _title = "Crop failed — retake" if err.lower().startswith("crop") else "Photo check failed — retake"
+    st.markdown(
+        f"""
+        <div class="verdict-fail">
+          <h2>{_title}</h2>
+          <p>{err}</p>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+    st.markdown(
+        """
+        <div class="action-card warn">
+          <ol class="action-steps">
+            <li>Rotate the phone so the opening is upright.</li>
+            <li>Center the rim and fill most of the frame (less floor / racks).</li>
+            <li>Even light — avoid heavy glare on the rim.</li>
+            <li>Upload or take the photo again — check starts automatically.</li>
+          </ol>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
 
 result = st.session_state.get("quick_result")
 if result:
@@ -449,8 +511,11 @@ if result:
         st.markdown(
             f"""
             <div class="verdict-fail">
-              <h2>Needs smoothing</h2>
-              <p>{size_label}&quot; — {smooth_pct:.0f}% smooth bend · worst spot {worst_spot_pct:.0f}% · fix flats/tight spots, then photo again</p>
+              <div class="verdict-body">
+                <h2>Needs smoothing</h2>
+                <p>{size_label}&quot; — {smooth_pct:.0f}% smooth bend · worst spot {worst_spot_pct:.0f}% · fix flats/tight spots, then photo again</p>
+              </div>
+              <div class="verdict-icon verdict-icon-fail" aria-hidden="true">👎</div>
             </div>
             """,
             unsafe_allow_html=True,

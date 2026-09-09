@@ -620,6 +620,25 @@ hr {
 .verdict-fail {
     background: var(--fail-bg) !important;
     border-left-color: var(--accent) !important;
+    display: grid !important;
+    grid-template-columns: 75% 25% !important;
+    padding: 0 !important;
+    overflow: hidden !important;
+}
+
+.verdict-fail .verdict-body {
+    padding: 1.15rem 1.2rem !important;
+    min-width: 0 !important;
+}
+
+.verdict-fail .verdict-icon-fail {
+    background: var(--accent) !important;
+    display: flex !important;
+    align-items: center !important;
+    justify-content: center !important;
+    font-size: clamp(2rem, 8vw, 2.75rem) !important;
+    line-height: 1 !important;
+    border-left: 2px solid var(--line) !important;
 }
 .verdict-borderline {
     background: var(--warn-bg) !important;
@@ -635,11 +654,14 @@ hr {
 }
 
 .verdict-pass .verdict-body h2,
-.verdict-pass .verdict-body p {
+.verdict-pass .verdict-body p,
+.verdict-fail .verdict-body h2,
+.verdict-fail .verdict-body p {
     margin: 0 !important;
 }
 
-.verdict-pass .verdict-body p {
+.verdict-pass .verdict-body p,
+.verdict-fail .verdict-body p {
     margin-top: 0.4rem !important;
 }
 
@@ -1038,8 +1060,12 @@ div[data-testid="stMarkdownContainer"]:has(.nav-header-anchor)
         font-size: clamp(1.15rem, 5vw, 1.4rem) !important;
     }
 
-    .verdict-pass, .verdict-fail, .verdict-borderline {
+    .verdict-borderline {
         padding: 0.95rem 1rem !important;
+    }
+
+    .verdict-pass, .verdict-fail {
+        padding: 0 !important;
     }
 
     .action-card {

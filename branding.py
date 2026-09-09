@@ -6,21 +6,12 @@ from pathlib import Path
 
 import streamlit as st
 
+# Plain ASCII — emoji page icons can break on some Windows consoles/encodings.
+PAGE_ICON = "RF"
+
 _STATIC = Path(__file__).resolve().parent / "static"
-# Kept for page_icon / favicon only.
 LOGO_PATH = _STATIC / "niles-steel-tank-logo-opaque.png"
 LOGO_FALLBACK_PATH = _STATIC / "niles-steel-tank-logo.png"
-
-
-def _resolve_logo() -> Path | None:
-    """Find a logo file for the browser tab icon."""
-    for path in (LOGO_PATH, LOGO_FALLBACK_PATH):
-        try:
-            if path.is_file():
-                return path
-        except OSError:
-            continue
-    return None
 
 
 def render_logo_band() -> None:

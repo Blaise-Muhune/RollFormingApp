@@ -23,6 +23,14 @@ def _menu_popover(*, active: str) -> None:
                 type="primary" if active == key else "secondary",
             ):
                 st.switch_page(path)
+        if active == "check":
+            st.divider()
+            st.checkbox(
+                "Improve rim find (OpenAI — slower)",
+                value=False,
+                key="quick_improve_rim",
+                help="Optional. Uses OpenAI to tune the rim finder. Off by default for speed.",
+            )
 
 
 def render_top_menu(*, active: str, title_html: str | None = None) -> None:

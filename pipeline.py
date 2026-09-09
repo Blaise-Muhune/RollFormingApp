@@ -18,6 +18,7 @@ from cv.detection import detect_and_crop_tank, load_detector
 from cv.preprocessing import generate_edge_map
 from cv.rim_analysis import detect_rim_multistart
 from cv.rim_fit import build_rim_equation_export, fit_rim_equation
+from cv.rim_seed import seed_rim_geometry
 from operator_display import (
     SMOOTH_PASS_MIN_PCT,
     SPOT_TOLERANCE_PCT,
@@ -48,12 +49,15 @@ DEFAULT_CV_SETTINGS = {
     "canny_low": 50,
     "canny_high": 150,
     "blur_kernel": 5,
-    "num_points": 180,
+    # Finer sampling + less bridging so Check roll follows sharp dents better.
+    "num_points": 360,
     "search_band": 120,
-    "max_step_change": 30,
-    "window_size": 21,
+    "max_step_change": 45,
+    "window_size": 11,
     "curvature_tolerance": SPOT_TOLERANCE_PCT,
     "target_mode": "Smooth bend profile",
+    # SAM box-refine on the DINO crop (falls back to GrabCut / RANSAC).
+    "use_sam_refine": True,
 }
 
 
@@ -71,6 +75,87 @@ def _merge_cv_settings(overrides: dict[str, Any] | None) -> dict[str, Any]:
         blur += 1
     settings["blur_kernel"] = max(3, blur)
     return settings
+
+
+def _assess_tracking_failure(
+    *,
+    crop_h: int,
+    crop_w: int,
+    x_rim,
+    y_rim,
+    radius_uniform_pixels,
+    rim_seed: dict[str, Any],
+    auto_crop: bool,
+    best_detection: Any,
+) -> str | None:
+    """Return a retake message when crop/rim tracking looks unusable, else None."""
+    if auto_crop and best_detection is None:
+        return (
+            "Crop failed — no tank opening found. "
+            "Retake: rotate upright, center the rim, fill most of the frame."
+        )
+
+    radii = np.asarray(radius_uniform_pixels, dtype=float)
+    xs = np.asarray(x_rim, dtype=float)
+    ys = np.asarray(y_rim, dtype=float)
+    if radii.size < 8:
+        return "Rim tracking failed — too few points. Retake a clearer photo."
+
+    med_r = float(np.median(radii))
+    min_side = float(min(crop_h, crop_w))
+    cx = float(np.mean(xs))
+    cy = float(np.mean(ys))
+
+    margin = max(6.0, 0.03 * min_side)
+    near_edge = (
+        (xs < margin)
+        | (ys < margin)
+        | (xs > (crop_w - 1 - margin))
+        | (ys > (crop_h - 1 - margin))
+    )
+    edge_frac = float(np.mean(near_edge))
+
+    # Good close-ups often fill most of a tight crop — that is OK.
+    # Fail only when a large circle is also clipped / off-center (floor fit).
+    center_dx = abs(cx - 0.5 * crop_w) / max(crop_w, 1.0)
+    center_dy = abs(cy - 0.5 * crop_h) / max(crop_h, 1.0)
+    off_center = (center_dx > 0.18) or (center_dy > 0.18)
+    fills_frame = med_r > 0.42 * min_side
+    if fills_frame and (edge_frac > 0.22 or (off_center and edge_frac > 0.12)):
+        return (
+            "Crop / rim tracking failed — detected circle is clipped or off-center. "
+            "Retake: upright photo, opening centered, less floor and racks."
+        )
+
+    if edge_frac > 0.35:
+        return (
+            "Crop failed — rim runs off the image edge. "
+            "Retake: zoom out slightly and keep the full opening in frame."
+        )
+
+    # Wild radius scatter = tracker jumped between wrong edges / background.
+    peak = float(np.max(radii) - np.min(radii))
+    if med_r > 1e-6 and (peak / med_r) > 0.55:
+        return (
+            "Rim tracking failed — outline is unstable. "
+            "Retake: even light, no glare, opening fills the frame."
+        )
+
+    coverage = float(rim_seed.get("coverage") or 0.0)
+    source = str(rim_seed.get("mask_source") or "")
+    if (
+        auto_crop
+        and source == "fallback"
+        and coverage < 0.04
+        and fills_frame
+        and (off_center or edge_frac > 0.18)
+    ):
+        return (
+            "Crop failed — could not lock onto the opening. "
+            "Retake: center the rim, rotate upright, avoid busy backgrounds."
+        )
+
+    return None
 
 
 def run_quick_pipeline(
@@ -96,8 +181,8 @@ def run_quick_pipeline(
         raise PipelineError("Known actual radius must be greater than zero.")
 
     settings = _merge_cv_settings(cv_settings)
-    # Keep Check roll rim density bounded even if callers merge AI suggestions.
-    settings["num_points"] = min(int(settings.get("num_points") or 180), 180)
+    # Bound Check roll density (AI can suggest higher; 360 is the shop default).
+    settings["num_points"] = min(int(settings.get("num_points") or 360), 360)
     material = setup["material"]
 
     try:
@@ -131,9 +216,12 @@ def run_quick_pipeline(
         annotated_image = detection_output["annotated_image"]
         inner_size = detection_output.get("inner_size")
         if best_detection is None:
-            detection_warning = "No tank region detected. Using full image."
-            crop = image
-            inner_size = None
+            detection_warning = "No tank region detected."
+            # Check roll should not invent a rim on the full messy frame.
+            raise PipelineError(
+                "Crop failed — no tank opening found. "
+                "Retake: rotate upright, center the rim, fill most of the frame."
+            )
     else:
         crop = image
 
@@ -148,12 +236,24 @@ def run_quick_pipeline(
     )
     edges = edge_output["edges"]
     height, width = edges.shape
-    center_x = width // 2
-    center_y = height // 2
-    if inner_size:
-        expected_radius = int(0.5 * min(inner_size[0], inner_size[1]))
-    else:
-        expected_radius = int(0.5 * min(width, height))
+
+    # Mask refine (SAM → GrabCut) + ellipse seed before radial multistart.
+    rim_seed = seed_rim_geometry(
+        crop_rgb,
+        edges=edges,
+        inner_size=tuple(inner_size) if inner_size is not None else None,
+        use_sam=bool(settings.get("use_sam_refine", True)),
+    )
+    center_x = int(round(float(rim_seed["center_x"])))
+    center_y = int(round(float(rim_seed["center_y"])))
+    expected_radius = int(round(float(rim_seed["expected_radius"])))
+    # Tighten search when the ellipse/mask seed looks solid.
+    search_band = int(settings["search_band"])
+    if rim_seed.get("mask_source") in ("sam", "grabcut") and float(
+        rim_seed.get("coverage") or 0
+    ) > 0.08:
+        search_band = max(40, min(search_band, int(0.22 * expected_radius) + 24))
+
     if expected_radius < 10:
         raise PipelineError(
             "Analysis crop is too small for rim detection. "
@@ -166,7 +266,7 @@ def run_quick_pipeline(
             center_x=center_x,
             center_y=center_y,
             expected_radius=expected_radius,
-            search_band=int(settings["search_band"]),
+            search_band=search_band,
             max_step_change=int(settings["max_step_change"]),
             num_points=int(settings["num_points"]),
             window_size=int(settings["window_size"]),
@@ -183,6 +283,19 @@ def run_quick_pipeline(
         raise PipelineError(
             "Rim detection returned too few points. Open Advanced Inspect to tune."
         )
+
+    tracking_fail = _assess_tracking_failure(
+        crop_h=int(height),
+        crop_w=int(width),
+        x_rim=x_rim,
+        y_rim=y_rim,
+        radius_uniform_pixels=radius_uniform_pixels,
+        rim_seed=rim_seed,
+        auto_crop=bool(settings["use_auto_crop"]),
+        best_detection=best_detection,
+    )
+    if tracking_fail:
+        raise PipelineError(tracking_fail)
 
     # Prefer job target radius for springback; CV pass/fail follows the configured
     # target_mode (smooth bend profile by default for unattended Quick Run).
@@ -316,4 +429,12 @@ def run_quick_pipeline(
         "dominant_stations": dominant_stations,
         "cv_settings_used": settings,
         "real_radius_inches": float(real_radius_inches),
+        "rim_seed": {
+            "center_x": float(rim_seed["center_x"]),
+            "center_y": float(rim_seed["center_y"]),
+            "expected_radius": float(rim_seed["expected_radius"]),
+            "mask_source": rim_seed.get("mask_source"),
+            "coverage": float(rim_seed.get("coverage") or 0.0),
+            "prompt_box": list(rim_seed.get("prompt_box") or []),
+        },
     }

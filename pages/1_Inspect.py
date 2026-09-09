@@ -29,11 +29,12 @@ from cv.rim_fit import (
     format_signed_term,
     rim_equation_csv as build_rim_equation_csv,
 )
+from cv.rim_seed import seed_rim_geometry
 from cv import openai_assist as ai
 from cv import ui_busy
 from springback.ui import apply_theme, step_label
 from advanced_nav import render_top_menu
-from branding import LOGO_PATH
+from branding import PAGE_ICON
 from workflow import STEP_INSPECT, publish_rim_equation
 
 ai.load_project_dotenv()
@@ -43,7 +44,7 @@ ai.load_project_dotenv()
 # -------------------------------------------------
 st.set_page_config(
     page_title="Inspect rim",
-    page_icon=str(LOGO_PATH),
+    page_icon=PAGE_ICON,
     layout="wide",
     initial_sidebar_state="collapsed",
 )
@@ -885,12 +886,27 @@ with st.expander("Edge Detection", expanded=False):
 
 height, width = edges.shape
 
-default_center_x = width // 2
-default_center_y = height // 2
-if inner_size:
-    default_radius = int(0.5 * min(inner_size[0], inner_size[1]))
-else:
-    default_radius = int(0.5 * min(width, height))
+# SAM / GrabCut mask → ellipse seed (better center/radius than crop midpoint).
+_use_sam = st.sidebar.checkbox(
+    "SAM / GrabCut rim seed",
+    value=True,
+    key="setting_use_sam_refine",
+    help="Refine opening mask after auto-crop (SAM if available, else GrabCut), "
+    "then fit an ellipse for Center / Expected Radius defaults.",
+)
+_rim_seed = seed_rim_geometry(
+    np.array(crop),
+    edges=edges,
+    inner_size=tuple(inner_size) if inner_size is not None else None,
+    use_sam=bool(_use_sam),
+)
+default_center_x = int(round(float(_rim_seed["center_x"])))
+default_center_y = int(round(float(_rim_seed["center_y"])))
+default_radius = int(round(float(_rim_seed["expected_radius"])))
+st.sidebar.caption(
+    f"Rim seed: {_rim_seed.get('mask_source', 'fallback')} · "
+    f"r≈{default_radius}px"
+)
 
 with st.sidebar:
     step_label("Manual override")
