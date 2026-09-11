@@ -4,13 +4,13 @@ from __future__ import annotations
 
 # --- Check roll tolerance (single source of truth) ---
 # Per-point red/blue/green band, fix-card trigger, and pass worst-spot limit.
-SPOT_TOLERANCE_PCT = 5.0
+SPOT_TOLERANCE_PCT = 2.0
 # Minimum % of rim within ±SPOT_TOLERANCE to pass / borderline.
-SMOOTH_PASS_MIN_PCT = 85.0
+SMOOTH_PASS_MIN_PCT = 95.0
 SMOOTH_BORDERLINE_MIN_PCT = 75.0
 # Worst-spot ceiling for borderline (must be >= SPOT_TOLERANCE_PCT).
 BORDERLINE_WORST_MAX_PCT = 2.0
-# Show bright worst-spot arc on photo overlay (visual early warning only).
+# Show worst-spot callouts in text cards (not drawn on the photo overlay).
 WORST_SPOT_VISUAL_MIN_PCT = 3.0
 
 
@@ -48,9 +48,23 @@ def worst_smooth_spot(result: dict) -> dict:
     error = float(correction.get("max_abs_smooth_error_percent") or 0.0)
     return {
         "clock": angle_to_clock(np_degrees(angle_rad)),
-        "action": action,
+        "action": _operator_action(action),
         "error": error,
     }
+
+
+def primary_guidance_spot(result: dict) -> dict:
+    """Pick the callout operators should see first (Smooth fail, else Round fail)."""
+    if not roll_is_ready(result):
+        return worst_smooth_spot(result)
+    if not circle_is_round(result):
+        stats = circularity_stats(result)
+        return {
+            "clock": stats["clock"],
+            "action": stats["action"],
+            "error": stats["worst_pct"],
+        }
+    return worst_smooth_spot(result)
 
 
 def np_degrees(angle_rad: float) -> float:
@@ -76,6 +90,38 @@ def roll_is_borderline(result: dict) -> bool:
     ok = float(correction.get("within_tolerance_percent") or 0.0)
     worst = float(correction.get("max_abs_smooth_error_percent") or 0.0)
     return ok >= SMOOTH_BORDERLINE_MIN_PCT and worst <= BORDERLINE_WORST_MAX_PCT
+
+
+def circularity_stats(result: dict) -> dict:
+    """How close the rim is to a perfect circle (median radius)."""
+    circ = result.get("circularity") or {}
+    ok = float(circ.get("within_tolerance_percent") or 0.0)
+    worst = float(circ.get("max_abs_error_percent") or 0.0)
+    angle_rad = float(circ.get("worst_angle") or 0.0)
+    action = circ.get("worst_action") or "Check"
+    return {
+        "ok_pct": ok,
+        "worst_pct": worst,
+        "clock": angle_to_clock(np_degrees(angle_rad)),
+        "action": _operator_action(action),
+    }
+
+
+def circle_is_round(result: dict) -> bool:
+    """True when the opening stays close to a perfect circle."""
+    stats = circularity_stats(result)
+    return stats["ok_pct"] >= SMOOTH_PASS_MIN_PCT and stats["worst_pct"] <= SPOT_TOLERANCE_PCT
+
+
+def circle_is_borderline(result: dict) -> bool:
+    """Close to round, but not a clear pass."""
+    if circle_is_round(result):
+        return False
+    stats = circularity_stats(result)
+    return (
+        stats["ok_pct"] >= SMOOTH_BORDERLINE_MIN_PCT
+        and stats["worst_pct"] <= BORDERLINE_WORST_MAX_PCT
+    )
 
 
 def _mm(inches: float) -> float:
@@ -277,19 +323,8 @@ def operator_move_rows(stations):
     return rows
 
 
-def _arc_indices(n: int, center: int, half_width: int):
-    """Circular index window around a rim sample (for highlighting an arc)."""
-    import numpy as np
-
-    if n <= 0:
-        return np.array([], dtype=int)
-    half_width = max(1, int(half_width))
-    center = int(center) % n
-    return np.unique((center + np.arange(-half_width, half_width + 1)) % n)
-
-
 def draw_rim_overlay(ax, result: dict, *, outside: bool = True) -> None:
-    """Colored ring on the photo — red/blue problem arcs, worst spot highlighted."""
+    """Colored ring on the photo — red/blue problem arcs, green OK."""
     import numpy as np
     from matplotlib.collections import LineCollection
 
@@ -306,16 +341,18 @@ def draw_rim_overlay(ax, result: dict, *, outside: bool = True) -> None:
 
     too_tight = np.asarray(result["too_tight"], dtype=bool)
     too_flat = np.asarray(result["too_flat"], dtype=bool)
-    correction = result.get("correction", {})
-    worst_idx = correction.get("worst_smooth_idx")
-    worst_error = float(correction.get("max_abs_smooth_error_percent") or 0.0)
-    worst_signed = float(correction.get("worst_smooth_error_percent") or 0.0)
+    # If Smooth looks all green but Round failed, color from circle vs median.
+    if not (bool(too_tight.any()) or bool(too_flat.any())):
+        circ = result.get("circularity") or {}
+        circ_tight = circ.get("too_tight")
+        circ_flat = circ.get("too_flat")
+        if circ_tight is not None and circ_flat is not None:
+            too_tight = np.asarray(circ_tight, dtype=bool)
+            too_flat = np.asarray(circ_flat, dtype=bool)
 
     color_ok = (0.20, 0.90, 0.35, 0.95)
     color_tight = (0.23, 0.51, 0.96, 0.98)
     color_flat = (0.94, 0.27, 0.27, 0.98)
-    color_worst_tight = (0.08, 0.38, 1.0, 1.0)
-    color_worst_flat = (1.0, 0.12, 0.12, 1.0)
 
     colors = np.repeat([color_ok], x.size, axis=0)
     colors[too_tight] = color_tight
@@ -323,17 +360,6 @@ def draw_rim_overlay(ax, result: dict, *, outside: bool = True) -> None:
 
     linewidths = np.full(x.size, 2.4, dtype=float)
     linewidths[too_tight | too_flat] = 5.0
-
-    # Worst spot can still sit inside the green tolerance band — mark it anyway.
-    show_worst = worst_idx is not None and worst_error >= WORST_SPOT_VISUAL_MIN_PCT
-    if show_worst:
-        half = max(5, x.size // 20)
-        arc = _arc_indices(x.size, int(worst_idx), half)
-        if worst_signed > 0:
-            colors[arc] = color_worst_tight
-        else:
-            colors[arc] = color_worst_flat
-        linewidths[arc] = 7.5
 
     xo, yo = x, y
     if outside:
@@ -356,28 +382,6 @@ def draw_rim_overlay(ax, result: dict, *, outside: bool = True) -> None:
             clip_on=False,
         )
     )
-
-    if show_worst:
-        i = int(worst_idx) % len(xo)
-        pin = "#2563eb" if worst_signed > 0 else "#dc2626"
-        ax.scatter(
-            [xo[i]],
-            [yo[i]],
-            s=160,
-            c=pin,
-            edgecolors="#ffffff",
-            linewidths=3.0,
-            zorder=25,
-            clip_on=False,
-        )
-        ax.scatter(
-            [xo[i]],
-            [yo[i]],
-            s=36,
-            c="#111111",
-            zorder=26,
-            clip_on=False,
-        )
 
     margin = max(18.0, 0.04 * min(width, height))
     ax.set_xlim(-margin, width + margin)
@@ -443,14 +447,15 @@ def draw_target_vs_actual(ax, result: dict) -> None:
 
     too_tight = np.asarray(result.get("too_tight"), dtype=bool)
     too_flat = np.asarray(result.get("too_flat"), dtype=bool)
-    correction = result.get("correction", {})
-    worst_idx = correction.get("worst_smooth_idx")
-    worst_error = float(correction.get("max_abs_smooth_error_percent") or 0.0)
-    worst_signed = float(correction.get("worst_smooth_error_percent") or 0.0)
+    if not (bool(np.asarray(too_tight).any()) or bool(np.asarray(too_flat).any())):
+        circ = result.get("circularity") or {}
+        if circ.get("too_tight") is not None and circ.get("too_flat") is not None:
+            too_tight = np.asarray(circ["too_tight"], dtype=bool)
+            too_flat = np.asarray(circ["too_flat"], dtype=bool)
     use_colored = (
         too_tight.size == x.size
         and too_flat.size == x.size
-        and (too_tight.any() or too_flat.any() or worst_error >= WORST_SPOT_VISUAL_MIN_PCT)
+        and (too_tight.any() or too_flat.any())
     )
     if use_colored:
         from matplotlib.collections import LineCollection
@@ -458,12 +463,6 @@ def draw_target_vs_actual(ax, result: dict) -> None:
         colors = np.repeat([(0.92, 0.45, 0.13, 0.95)], x.size, axis=0)
         colors[too_tight] = (0.23, 0.51, 0.96, 0.98)
         colors[too_flat] = (0.94, 0.27, 0.27, 0.98)
-        if worst_idx is not None and worst_error >= WORST_SPOT_VISUAL_MIN_PCT:
-            arc = _arc_indices(x.size, int(worst_idx), max(5, x.size // 20))
-            if worst_signed > 0:
-                colors[arc] = (0.08, 0.38, 1.0, 1.0)
-            else:
-                colors[arc] = (1.0, 0.12, 0.12, 1.0)
         pts = np.column_stack([x, y])
         segs = np.stack([pts, np.roll(pts, -1, axis=0)], axis=1)
         ax.add_collection(

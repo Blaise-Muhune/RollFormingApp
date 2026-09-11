@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import copy
 import hashlib
-import importlib
 from io import BytesIO
 
 import streamlit as st
@@ -19,20 +18,21 @@ from bertsch_chart import (
     stash_job_for_correct,
 )
 from cv import openai_assist as ai
-import operator_display as op_display
+from operator_display import (
+    SPOT_TOLERANCE_PCT,
+    build_lr_fix_plan,
+    circle_is_borderline,
+    circle_is_round,
+    circularity_stats,
+    draw_rim_overlay,
+    draw_target_vs_actual,
+    primary_guidance_spot,
+    roll_is_borderline,
+    roll_is_ready,
+)
 from springback.defaults import get_default_setup, setup_to_json
 from springback.ui import apply_theme, lr_hero, start_badge, step_label, step_label_row
 from workflow import ensure_workflow_state, publish_rim_equation
-
-op_display = importlib.reload(op_display)
-build_lr_fix_plan = op_display.build_lr_fix_plan
-draw_rim_overlay = op_display.draw_rim_overlay
-draw_target_vs_actual = op_display.draw_target_vs_actual
-roll_is_borderline = op_display.roll_is_borderline
-roll_is_ready = op_display.roll_is_ready
-worst_smooth_spot = op_display.worst_smooth_spot
-SPOT_TOLERANCE_PCT = op_display.SPOT_TOLERANCE_PCT
-WORST_SPOT_VISUAL_MIN_PCT = op_display.WORST_SPOT_VISUAL_MIN_PCT
 
 st.set_page_config(
     page_title="Check roll",
@@ -73,13 +73,6 @@ def _cached_start_lr(
         )
     except Exception:
         return None
-
-
-@st.cache_resource
-def get_quick_detector():
-    from cv.detection import load_detector
-
-    return load_detector()
 
 
 def _zone_overlay_image(result: dict) -> Image.Image:
@@ -258,6 +251,7 @@ else:
                 "quick_overlay_png",
                 "quick_compare_png",
                 "quick_plot_token",
+                "quick_load_photo_overlays",
             ):
                 st.session_state.pop(_k, None)
             st.rerun()
@@ -288,6 +282,7 @@ if _photo_token != _prev_photo_token:
         "quick_compare_png",
         "quick_plot_token",
         "quick_scroll_to_result",
+        "quick_load_photo_overlays",
     ):
         st.session_state.pop(_k, None)
     if _photo_token is not None:
@@ -327,6 +322,7 @@ if run and photo_bytes is not None and not job_missing:
         st.session_state.pop("quick_overlay_png", None)
         st.session_state.pop("quick_compare_png", None)
         st.session_state.pop("quick_plot_token", None)
+        st.session_state.pop("quick_load_photo_overlays", None)
         image_bytes = photo_bytes
         cv_settings = dict(DEFAULT_CV_SETTINGS)
         cv_settings["use_auto_crop"] = auto_crop
@@ -452,7 +448,7 @@ if result:
     borderline = roll_is_borderline(result)
     smooth_pct = float(result["correction"]["within_tolerance_percent"])
     worst_spot_pct = float(result["correction"].get("max_abs_smooth_error_percent") or 0.0)
-    worst_spot = worst_smooth_spot(result)
+    worst_spot = primary_guidance_spot(result)
     tol_pct = float(result.get("curvature_tolerance") or SPOT_TOLERANCE_PCT)
     size_label = f"{job_diameter_in:.0f}"
 
@@ -521,18 +517,131 @@ if result:
             unsafe_allow_html=True,
         )
 
-    if worst_spot_pct >= tol_pct:
+    circ = circularity_stats(result)
+    circ_round = circle_is_round(result)
+    circ_border = circle_is_borderline(result)
+    # Red = clear fail on Smooth and/or Round (not the yellow “mostly” band).
+    is_red = (not ready and not borderline) or (not circ_round and not circ_border)
+
+    if circ_round:
         st.markdown(
             f"""
-            <div class="action-card primary">
-              <h3>{worst_spot['clock']} - {worst_spot['action']}</h3>
-              <p style="margin:0">Smooth this area first.</p>
+            <div class="verdict-pass">
+              <div class="verdict-body">
+                <h2>Round</h2>
+                <p>{size_label}&quot; — {circ['ok_pct']:.0f}% within circle · worst {circ['worst_pct']:.0f}% · close to a perfect circle</p>
+              </div>
+              <div class="verdict-icon verdict-icon-pass" aria-hidden="true">👍</div>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
+    elif circ_border:
+        st.markdown(
+            f"""
+            <div class="verdict-borderline">
+              <h2>Mostly round</h2>
+              <p>{size_label}&quot; — {circ['ok_pct']:.0f}% within circle · worst {circ['worst_pct']:.0f}% · slight oval is OK if template fits</p>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
+    else:
+        st.markdown(
+            f"""
+            <div class="verdict-fail">
+              <div class="verdict-body">
+                <h2>Out of round</h2>
+                <p>{size_label}&quot; — {circ['ok_pct']:.0f}% within circle · worst {circ['worst_pct']:.0f}% · opening is oval or dented vs a true circle</p>
+              </div>
+              <div class="verdict-icon verdict-icon-fail" aria-hidden="true">👎</div>
             </div>
             """,
             unsafe_allow_html=True,
         )
 
-    if not ready:
+    def _render_photo_detail(*, expanded: bool) -> None:
+        """Rim overlay expander. Builds plots only when open/needed (keeps Ready fast)."""
+        load_key = "quick_load_photo_overlays"
+        with st.expander("Photo detail", expanded=expanded):
+            should_build = expanded or bool(st.session_state.get(load_key))
+            if not should_build:
+                if st.button("Show overlays", key="quick_photo_detail_load_btn"):
+                    st.session_state[load_key] = True
+                    st.rerun()
+                return
+
+            x_rim = result.get("x_rim")
+            try:
+                rim_n = int(len(x_rim)) if x_rim is not None else 0
+            except TypeError:
+                rim_n = 0
+            plot_token = (
+                f"v6:{float(result['correction']['within_tolerance_percent']):.2f}:"
+                f"{float(result['correction'].get('max_abs_smooth_error_percent') or 0):.2f}:"
+                f"{int(result['correction'].get('worst_smooth_idx') or 0)}:"
+                f"{rim_n}:"
+                f"{float(result.get('real_radius_inches') or 0):.4f}"
+            )
+            if st.session_state.get("quick_plot_token") != plot_token:
+                import matplotlib.pyplot as plt
+
+                buf1 = BytesIO()
+                fig, ax = plt.subplots(figsize=(4.6, 4.6))
+                draw_rim_overlay(ax, result, outside=True)
+                fig.savefig(buf1, format="png", bbox_inches="tight", dpi=200)
+                plt.close(fig)
+                buf1.seek(0)
+                st.session_state["quick_overlay_png"] = buf1.getvalue()
+
+                buf2 = BytesIO()
+                fig2, ax2 = plt.subplots(figsize=(4.6, 4.6))
+                draw_target_vs_actual(ax2, result)
+                fig2.savefig(buf2, format="png", bbox_inches="tight", dpi=200)
+                plt.close(fig2)
+                buf2.seek(0)
+                st.session_state["quick_compare_png"] = buf2.getvalue()
+                st.session_state["quick_plot_token"] = plot_token
+
+            if st.session_state.get("quick_overlay_png"):
+                st.markdown("**Red = Add Bend · Blue = Ease Off · Green = OK**")
+                st.image(st.session_state["quick_overlay_png"], use_container_width=True)
+            if st.session_state.get("quick_compare_png"):
+                st.markdown("**Dashed = Smooth Reference · Orange = Detected Rim**")
+                st.image(st.session_state["quick_compare_png"], use_container_width=True)
+
+            ai_status = st.session_state.get("quick_ai_status") or {}
+            verdict = str(ai_status.get("verdict") or "")
+            if verdict.lower() == "retake":
+                st.warning("Poor photo — retake if you can.")
+            if result.get("detection_warning"):
+                st.caption(result["detection_warning"])
+
+            if not ready and fix_start:
+                detail_plan = build_lr_fix_plan(result, fix_start)
+                if detail_plan.get("mode") == "single" and detail_plan.get("moves"):
+                    st.caption("Smoothness spots that agreed:")
+                    for move in detail_plan["moves"]:
+                        st.markdown(f"- {move['short_line']}")
+
+    # On red fail: photo detail first and open. On pass: collapsed later (faster).
+    if is_red:
+        _render_photo_detail(expanded=True)
+
+    # Always show Add bend / Ease off when Smooth or Round is red.
+    if is_red and float(worst_spot.get("error") or 0.0) >= tol_pct:
+        st.markdown(
+            f"""
+            <div class="action-card primary">
+              <h3>{worst_spot['clock']} - {worst_spot['action']}</h3>
+              <p style="margin:0">Work this area first (red = Add bend · blue = Ease off on the photo).</p>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
+
+    needs_fix_ui = (not ready) or (not circ_round)
+    if needs_fix_ui:
         plan = (
             build_lr_fix_plan(result, fix_start)
             if fix_start
@@ -596,84 +705,30 @@ if result:
                         )
         else:
             st.markdown(
-                """
+                f"""
                 <div class="action-card">
-                  <p style="margin:0">The curve is not reading smooth enough — check the template and take another photo.</p>
+                  <p style="margin:0">
+                    {worst_spot['clock']}: <strong>{worst_spot['action']}</strong>.
+                    Check the hanging template, nudge L/R that way, then photo again.
+                  </p>
                 </div>
                 """,
                 unsafe_allow_html=True,
             )
 
-    # Cache overlay PNGs so widget reruns don't redraw Matplotlib.
-    x_rim = result.get("x_rim")
-    try:
-        rim_n = int(len(x_rim)) if x_rim is not None else 0
-    except TypeError:
-        rim_n = 0
-    plot_token = (
-        f"v5:{float(result['correction']['within_tolerance_percent']):.2f}:"
-        f"{float(result['correction'].get('max_abs_smooth_error_percent') or 0):.2f}:"
-        f"{int(result['correction'].get('worst_smooth_idx') or 0)}:"
-        f"{rim_n}:"
-        f"{float(result.get('real_radius_inches') or 0):.4f}"
-    )
-    if st.session_state.get("quick_plot_token") != plot_token:
-        import matplotlib.pyplot as plt
+    if not is_red:
+        _render_photo_detail(expanded=False)
 
-        buf1 = BytesIO()
-        fig, ax = plt.subplots(figsize=(4.6, 4.6))
-        draw_rim_overlay(ax, result, outside=True)
-        fig.savefig(buf1, format="png", bbox_inches="tight", dpi=200)
-        plt.close(fig)
-        buf1.seek(0)
-        st.session_state["quick_overlay_png"] = buf1.getvalue()
-
-        buf2 = BytesIO()
-        fig2, ax2 = plt.subplots(figsize=(4.6, 4.6))
-        draw_target_vs_actual(ax2, result)
-        fig2.savefig(buf2, format="png", bbox_inches="tight", dpi=200)
-        plt.close(fig2)
-        buf2.seek(0)
-        st.session_state["quick_compare_png"] = buf2.getvalue()
-        st.session_state["quick_plot_token"] = plot_token
-
-    with st.expander("Photo detail", expanded=(not ready and not borderline)):
-        if st.session_state.get("quick_overlay_png"):
-            st.markdown("**Red = Add Bend · Blue = Ease Off · Green = OK**")
-            if worst_spot_pct >= WORST_SPOT_VISUAL_MIN_PCT:
-                st.caption(
-                    f"Bright arc + dot mark the worst spot ({worst_spot['clock']} — "
-                    f"{worst_spot['action'].split('(')[0].strip()})."
-                )
-            st.image(st.session_state["quick_overlay_png"], use_container_width=True)
-        if st.session_state.get("quick_compare_png"):
-            st.markdown("**Dashed = Smooth Reference · Orange = Detected Rim**")
-            st.image(st.session_state["quick_compare_png"], use_container_width=True)
-
-        ai_status = st.session_state.get("quick_ai_status") or {}
-        verdict = str(ai_status.get("verdict") or "")
-        if verdict.lower() == "retake":
-            st.warning("Poor photo — retake if you can.")
-        if result.get("detection_warning"):
-            st.caption(result["detection_warning"])
-
-        if not ready and fix_start:
-            plan = build_lr_fix_plan(result, fix_start)
-            if plan.get("mode") == "single" and plan.get("moves"):
-                st.caption("Smoothness spots that agreed:")
-                for move in plan["moves"]:
-                    st.markdown(f"- {move['short_line']}")
-
-        if not job_missing and thickness_in is not None:
-            if st.button(
-                "Open full calculator",
-                use_container_width=True,
-                key="goto_correct_from_result",
-            ):
-                stash_job_for_correct(
-                    diameter_in=float(job_diameter_in),
-                    thickness_in=float(thickness_in),
-                    material_name=material_name,
-                    yield_psi=float(yield_psi) if yield_psi is not None else None,
-                )
-                st.switch_page("pages/2_Correct.py")
+    if not job_missing and thickness_in is not None:
+        if st.button(
+            "Open full calculator",
+            use_container_width=True,
+            key="goto_correct_from_result",
+        ):
+            stash_job_for_correct(
+                diameter_in=float(job_diameter_in),
+                thickness_in=float(thickness_in),
+                material_name=material_name,
+                yield_psi=float(yield_psi) if yield_psi is not None else None,
+            )
+            st.switch_page("pages/2_Correct.py")

@@ -49,15 +49,15 @@ DEFAULT_CV_SETTINGS = {
     "canny_low": 50,
     "canny_high": 150,
     "blur_kernel": 5,
-    # Finer sampling + less bridging so Check roll follows sharp dents better.
-    "num_points": 360,
+    # Stable rim lock: crop-center + DINO size (SAM refine optional in Inspect).
+    "num_points": 180,
     "search_band": 120,
-    "max_step_change": 45,
-    "window_size": 11,
+    "max_step_change": 30,
+    "window_size": 21,
     "curvature_tolerance": SPOT_TOLERANCE_PCT,
     "target_mode": "Smooth bend profile",
-    # SAM box-refine on the DINO crop (falls back to GrabCut / RANSAC).
-    "use_sam_refine": True,
+    # Off by default — mask seeds were pulling the rim off the opening.
+    "use_sam_refine": False,
 }
 
 
@@ -174,15 +174,15 @@ def run_quick_pipeline(
     Returns a result dict with rim equation payload, springback metrics,
     machine positions, and station tables. Raises ``PipelineError`` on failure.
 
-    When ``include_schedule`` is True, side-roll L/R deltas are only computed if
-    the roll is not Ready (pass/fail). Ready checks skip that expensive path.
+    When ``include_schedule`` is True, side-roll L/R work runs only if the roll
+    is not Ready. Ready checks skip machine solves and the station schedule.
     """
     if real_radius_inches <= 0:
         raise PipelineError("Known actual radius must be greater than zero.")
 
     settings = _merge_cv_settings(cv_settings)
-    # Bound Check roll density (AI can suggest higher; 360 is the shop default).
-    settings["num_points"] = min(int(settings.get("num_points") or 360), 360)
+    # Bound Check roll density (AI can suggest higher; 180 is the shop default).
+    settings["num_points"] = min(int(settings.get("num_points") or 180), 180)
     material = setup["material"]
 
     try:
@@ -237,22 +237,43 @@ def run_quick_pipeline(
     edges = edge_output["edges"]
     height, width = edges.shape
 
-    # Mask refine (SAM → GrabCut) + ellipse seed before radial multistart.
-    rim_seed = seed_rim_geometry(
-        crop_rgb,
-        edges=edges,
-        inner_size=tuple(inner_size) if inner_size is not None else None,
-        use_sam=bool(settings.get("use_sam_refine", True)),
-    )
-    center_x = int(round(float(rim_seed["center_x"])))
-    center_y = int(round(float(rim_seed["center_y"])))
-    expected_radius = int(round(float(rim_seed["expected_radius"])))
-    # Tighten search when the ellipse/mask seed looks solid.
+    # Proven Check roll seed: crop center + DINO inner size (not mask ellipse).
+    # Mask/SAM refine is optional and only adopted when it agrees with DINO.
+    center_x = width // 2
+    center_y = height // 2
+    if inner_size:
+        expected_radius = int(0.5 * min(inner_size[0], inner_size[1]))
+    else:
+        expected_radius = int(0.5 * min(width, height))
+    rim_seed: dict[str, Any] = {
+        "center_x": float(center_x),
+        "center_y": float(center_y),
+        "expected_radius": float(expected_radius),
+        "mask_source": "dino",
+        "coverage": 0.0,
+    }
     search_band = int(settings["search_band"])
-    if rim_seed.get("mask_source") in ("sam", "grabcut") and float(
-        rim_seed.get("coverage") or 0
-    ) > 0.08:
-        search_band = max(40, min(search_band, int(0.22 * expected_radius) + 24))
+
+    if bool(settings.get("use_sam_refine", False)):
+        try:
+            refined = seed_rim_geometry(
+                crop_rgb,
+                edges=edges,
+                inner_size=tuple(inner_size) if inner_size is not None else None,
+                use_sam=True,
+            )
+            seed_r = float(refined.get("expected_radius") or 0.0)
+            if (
+                seed_r >= 10
+                and expected_radius > 0
+                and abs(seed_r - expected_radius) / expected_radius <= 0.18
+            ):
+                center_x = int(round(float(refined["center_x"])))
+                center_y = int(round(float(refined["center_y"])))
+                expected_radius = int(round(seed_r))
+                rim_seed = refined
+        except Exception:
+            pass
 
     if expected_radius < 10:
         raise PipelineError(
@@ -307,6 +328,16 @@ def run_quick_pipeline(
         curvature_tolerance=float(settings["curvature_tolerance"]),
         target_mode=settings["target_mode"],
     )
+    # Separate score vs a perfect circle (median radius). Smooth can pass an oval;
+    # circularity tells how round the opening actually is.
+    circularity_output = compute_curvature_correction(
+        radius_uniform_pixels=radius_uniform_pixels,
+        theta_uniform=theta_uniform,
+        expected_radius=expected_radius,
+        real_radius_inches=float(real_radius_inches),
+        curvature_tolerance=float(settings["curvature_tolerance"]),
+        target_mode="Median detected radius",
+    )
 
     pixels_per_inch = float(correction_output["pixels_per_inch"])
     target_radius_pixels = float(correction_output["target_radius_pixels"])
@@ -319,6 +350,12 @@ def run_quick_pipeline(
         within_tol >= float(ready_ok_percent)
         and max_smooth_error <= SPOT_TOLERANCE_PCT
     )
+    circle_ok = (
+        float(circularity_output["within_tolerance_percent"]) >= float(ready_ok_percent)
+        and float(circularity_output["max_abs_smooth_error_percent"]) <= SPOT_TOLERANCE_PCT
+    )
+    # L/R fix math runs when Smooth or Round fails (not only Smooth).
+    needs_fix_solve = not roll_ready or not circle_ok
 
     rim_fit = fit_rim_equation(
         x_rim=x_rim,
@@ -336,7 +373,7 @@ def run_quick_pipeline(
         pixels_per_inch=pixels_per_inch,
     )
 
-    # --- Springback + machine (lighter samples for shop check) ---
+    # --- Springback + machine (skip heavy solves when Ready) ---
     sample_n = max(400, min(int(solver_sample_count), 2000))
     calculation = calculate_required_loaded_radius(
         material["elastic_modulus_ksi"],
@@ -345,11 +382,6 @@ def run_quick_pipeline(
         material["target_final_radius_in"],
     )
     loaded_radius = calculation["required_loaded_radius"]
-    positions = solve_machine_positions(
-        setup,
-        loaded_radius,
-        sample_count=sample_n,
-    )
     estimated_final_radius = estimate_final_radius_from_loaded(
         loaded_radius,
         material["elastic_modulus_ksi"],
@@ -357,33 +389,43 @@ def run_quick_pipeline(
         material["sheet_thickness_in"],
     )
 
+    positions = None
     compensation = None
     adjusted_stations: list = []
     dominant_stations: list = []
-    # Pass/fail does not need L/R schedule. Fail only solves dominant stations.
-    if include_schedule and not roll_ready:
-        coefficients = parse_ellipse_coefficients(json.dumps(rim_equation_export))
-        compensation = sample_ellipse_compensation(
-            coefficients,
-            material["target_final_radius_in"],
-            material["elastic_modulus_ksi"],
-            material["yield_strength_ksi"],
-            material["sheet_thickness_in"],
-        )
-        dominant_only = tuple(compensation["dominant_stations"])
-        adjusted_stations = calculate_side_roll_adjustment_schedule(
-            setup_to_json(setup),
+    # Ready on both Smooth and Round skips heavy L/R work.
+    if needs_fix_solve:
+        positions = solve_machine_positions(
+            setup,
             loaded_radius,
-            dominant_only,
             sample_count=sample_n,
         )
-        dominant_stations = sorted(
-            adjusted_stations,
-            key=lambda row: row["drive_distance_in"],
-        )
+        if include_schedule:
+            coefficients = parse_ellipse_coefficients(json.dumps(rim_equation_export))
+            compensation = sample_ellipse_compensation(
+                coefficients,
+                material["target_final_radius_in"],
+                material["elastic_modulus_ksi"],
+                material["yield_strength_ksi"],
+                material["sheet_thickness_in"],
+            )
+            dominant_only = tuple(compensation["dominant_stations"])
+            adjusted_stations = calculate_side_roll_adjustment_schedule(
+                setup_to_json(setup),
+                loaded_radius,
+                dominant_only,
+                sample_count=sample_n,
+            )
+            dominant_stations = sorted(
+                adjusted_stations,
+                key=lambda row: row["drive_distance_in"],
+            )
 
-    left_ok = positions["left_solution"]["travel_in_range"]
-    right_ok = positions["right_solution"]["travel_in_range"]
+    if positions is not None:
+        left_ok = positions["left_solution"]["travel_in_range"]
+        right_ok = positions["right_solution"]["travel_in_range"]
+    else:
+        left_ok = right_ok = True
 
     return {
         "ok": True,
@@ -416,6 +458,16 @@ def run_quick_pipeline(
             "worst_smooth_angle": float(correction_output["worst_smooth_angle"]),
             "pixels_per_inch": pixels_per_inch,
             "cv_target_radius_inches": cv_target_radius_inches,
+        },
+        "circularity": {
+            "within_tolerance_percent": float(circularity_output["within_tolerance_percent"]),
+            "max_abs_error_percent": float(circularity_output["max_abs_smooth_error_percent"]),
+            "worst_error_percent": float(circularity_output["worst_smooth_error_percent"]),
+            "worst_angle": float(circularity_output["worst_smooth_angle"]),
+            "worst_idx": int(circularity_output["worst_smooth_idx"]),
+            "worst_action": circularity_output["worst_smooth_action"],
+            "too_flat": circularity_output["too_flat"],
+            "too_tight": circularity_output["too_tight"],
         },
         "rim_fit": rim_fit,
         "rim_equation_export": rim_equation_export,
